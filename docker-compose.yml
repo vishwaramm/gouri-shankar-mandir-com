@@ -1,0 +1,22 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: gouri-shankar-mandir-api
+    env_file:
+      - .env.local
+    ports:
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8200}:8080"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: gouri-shankar-mandir-web
+    depends_on:
+      - api
+    ports:
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-3200}:80"
+    restart: unless-stopped

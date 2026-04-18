@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="800" viewBox="0 0 640 800" fill="none" role="img" aria-label="Placeholder portrait for Krisen Maharaj">
+  <rect width="640" height="800" rx="36" fill="#151122"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="640" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35235f"/>
+      <stop offset="0.55" stop-color="#1a1634"/>
+      <stop offset="1" stop-color="#0d0a18"/>
+    </linearGradient>
+    <radialGradient id="r" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(320 248) rotate(90) scale(250 225)">
+      <stop stop-color="#937bff" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#937bff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="800" rx="36" fill="url(#g)"/>
+  <circle cx="320" cy="248" r="210" fill="url(#r)"/>
+  <circle cx="320" cy="240" r="121" fill="#efe8ff" opacity="0.92"/>
+  <path d="M191 560c18-78 79-124 129-124 52 0 112 46 130 124 6 25-13 48-38 48H229c-25 0-44-23-38-48Z" fill="#efe8ff" opacity="0.92"/>
+  <path d="M232 203c17-34 54-57 89-57 39 0 77 25 95 64 8 17 4 37-10 50-20 18-50 28-85 28-39 0-72-11-94-31-15-15-20-36-12-54Z" fill="#ffffff" opacity="0.2"/>
+  <rect x="194" y="650" width="252" height="18" rx="9" fill="#b9a5ff" opacity="0.5"/>
+  <text x="320" y="742" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="50" font-weight="700" fill="#efe8ff">KM</text>
+  <text x="320" y="782" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#c8bdf0">Placeholder portrait</text>
+</svg>
