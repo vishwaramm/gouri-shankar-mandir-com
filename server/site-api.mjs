@@ -95,7 +95,7 @@ async function sendMail(env, { subject, text, html, replyTo }) {
   const smtpConfigured = Boolean(smtpHost && smtpUser && smtpPass)
 
   if (!smtpConfigured) {
-    return false
+    return { sent: false, reason: 'missing_smtp' }
   }
 
   const transporter = nodemailer.createTransport({
@@ -108,16 +108,24 @@ async function sendMail(env, { subject, text, html, replyTo }) {
     },
   })
 
-  await transporter.sendMail({
-    from: env.SMTP_FROM || 'Gourishankar Mandir <no-reply@gourishankar-mandir.com>',
-    to: RECIPIENT_EMAIL,
-    replyTo,
-    subject,
-    text,
-    html,
-  })
+  try {
+    await transporter.sendMail({
+      from: env.SMTP_FROM || 'Gourishankar Mandir <no-reply@gourishankar-mandir.com>',
+      to: RECIPIENT_EMAIL,
+      replyTo,
+      subject,
+      text,
+      html,
+    })
 
-  return true
+    return { sent: true, reason: 'sent' }
+  } catch (error) {
+    return {
+      sent: false,
+      reason: 'smtp_error',
+      errorMessage: error?.message || 'SMTP delivery failed.',
+    }
+  }
 }
 
 export async function handleSiteApi(request, response, pathname, env = {}) {
@@ -255,22 +263,19 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       </div>
     `
 
-    let emailed = false
-    try {
-      emailed = await sendMail(env, {
-        subject,
-        text,
-        html,
-        replyTo: email,
-      })
-    } catch {
-      emailed = false
-    }
+    const mailResult = await sendMail(env, {
+      subject,
+      text,
+      html,
+      replyTo: email,
+    })
 
     sendJson(response, 200, {
       ok: true,
       message: 'Received.',
-      emailed,
+      emailed: mailResult.sent,
+      mailStatus: mailResult.reason,
+      mailError: mailResult.errorMessage || '',
       entry,
     })
     return true
@@ -338,22 +343,19 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       </div>
     `
 
-    let emailed = false
-    try {
-      emailed = await sendMail(env, {
-        subject: finalSubject,
-        text,
-        html,
-        replyTo: email,
-      })
-    } catch {
-      emailed = false
-    }
+    const mailResult = await sendMail(env, {
+      subject: finalSubject,
+      text,
+      html,
+      replyTo: email,
+    })
 
     sendJson(response, 200, {
       ok: true,
       message: 'Received.',
-      emailed,
+      emailed: mailResult.sent,
+      mailStatus: mailResult.reason,
+      mailError: mailResult.errorMessage || '',
       entry,
     })
     return true

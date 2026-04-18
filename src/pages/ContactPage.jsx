@@ -61,7 +61,12 @@ function ContactPage() {
         result.emailed === false
           ? {
               type: 'error',
-              message: 'Saved. Mail delivery is not configured.',
+              message:
+                result.mailStatus === 'missing_smtp'
+                  ? 'Saved. Mail delivery is not configured.'
+                  : result.mailError
+                    ? `Saved. Mail delivery failed: ${result.mailError}`
+                    : 'Saved. Mail delivery failed.',
             }
           : {
               type: 'success',

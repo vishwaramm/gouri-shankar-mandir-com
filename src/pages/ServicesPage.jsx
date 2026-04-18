@@ -52,7 +52,11 @@ function ServicesPage() {
       .then((result) => {
         setRequestStatus(
           result.emailed === false
-            ? 'Saved. Mail delivery is not configured.'
+            ? result.mailStatus === 'missing_smtp'
+              ? 'Saved. Mail delivery is not configured.'
+              : result.mailError
+                ? `Saved. Mail delivery failed: ${result.mailError}`
+                : 'Saved. Mail delivery failed.'
             : 'Sent.',
         )
         setServiceRequest({
