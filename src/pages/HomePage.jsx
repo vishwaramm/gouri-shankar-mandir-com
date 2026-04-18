@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { createPaymentLink } from '../lib/siteApi.js'
 import { serviceOfferings } from '../content.js'
 
 const highlights = [
@@ -25,20 +26,31 @@ const siteLinks = [
   ['Contact', '/contact', 'Write to the mandir.'],
 ]
 
-function buildBuyLink(service) {
-  if (!service.contributionAmountCents) {
-    return `/services?service=${encodeURIComponent(service.title)}`
+function HomePage() {
+  const navigate = useNavigate()
+
+  const handleServiceAction = async (service) => {
+    try {
+      if (!service.contributionAmountCents) {
+        navigate(`/services?service=${encodeURIComponent(service.title)}`)
+        return
+      }
+
+      const result = await createPaymentLink({
+        service: service.title,
+        amountCents: service.contributionAmountCents,
+      })
+
+      if (!result.paymentLinkToken) {
+        throw new Error('Unable to open the donation page.')
+      }
+
+      navigate(`/payments?token=${encodeURIComponent(result.paymentLinkToken)}`)
+    } catch {
+      window.alert('Unable to open the donation page right now.')
+    }
   }
 
-  const params = new URLSearchParams({
-    service: service.title,
-    amount: String(service.contributionAmountCents),
-  })
-
-  return `/payments?${params.toString()}`
-}
-
-function HomePage() {
   return (
     <main>
       <section
@@ -175,9 +187,13 @@ function HomePage() {
                     </div>
 
                     <div className="d-flex flex-wrap gap-3 align-items-center">
-                      <NavLink className="btn btn-primary rounded-pill px-4" to={buildBuyLink(service)}>
+                      <button
+                        type="button"
+                        className="btn btn-primary rounded-pill px-4"
+                        onClick={() => handleServiceAction(service)}
+                      >
                         {service.contributionAmountCents ? 'Donate now' : 'Request quote'}
-                      </NavLink>
+                      </button>
                       <NavLink className="btn btn-outline-light rounded-pill px-4" to="/services">
                         Learn more
                       </NavLink>

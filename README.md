@@ -87,6 +87,8 @@ For the embedded Square card form in the browser:
 - `VITE_SQUARE_LOCATION_ID`
 - optional `VITE_SQUARE_ENVIRONMENT` (`sandbox` or `production`)
 
+These are exposed to the frontend by the API at `/api/runtime-config` so the production build does not need to hardcode them at compile time.
+
 For canonical URLs and share metadata:
 
 - optional `VITE_SITE_URL`

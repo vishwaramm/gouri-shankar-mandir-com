@@ -7,7 +7,7 @@ import {
   serviceOfferings,
   serviceOptions,
 } from '../content.js'
-import { createServiceRequest } from '../lib/siteApi.js'
+import { createPaymentLink, createServiceRequest } from '../lib/siteApi.js'
 
 const serviceFaqItems = [
   {
@@ -91,13 +91,17 @@ function ServicesPage() {
     setRequestModalOpen(true)
   }
 
-  const openPaymentsPage = (service, amountCents) => {
-    const params = new URLSearchParams({
+  const openPaymentsPage = async (service, amountCents) => {
+    const result = await createPaymentLink({
       service,
-      amount: String(amountCents),
+      amountCents,
     })
 
-    navigate(`/payments?${params.toString()}`)
+    if (!result.paymentLinkToken) {
+      throw new Error('Unable to start the donation page.')
+    }
+
+    navigate(`/payments?token=${encodeURIComponent(result.paymentLinkToken)}`)
   }
 
   const closeRequestModal = () => {
@@ -305,13 +309,18 @@ function ServicesPage() {
                     <button
                       type="button"
                       className="btn btn-primary rounded-pill"
-                      onClick={() => {
-                        if (card.contributionAmountCents) {
-                          openPaymentsPage(card.title, card.contributionAmountCents)
-                          return
-                        }
+                      onClick={async () => {
+                        try {
+                          if (card.contributionAmountCents) {
+                            await openPaymentsPage(card.title, card.contributionAmountCents)
+                            return
+                          }
 
-                        openRequestModal(card.title)
+                          openRequestModal(card.title)
+                        } catch {
+                          setRequestStatus('Unable to open the donation page right now.')
+                          setRequestModalOpen(true)
+                        }
                       }}
                     >
                       {card.contributionAmountCents ? 'Donate now' : 'Request quote'}

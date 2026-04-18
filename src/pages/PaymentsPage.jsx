@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
-import { serviceOfferings } from '../content.js'
+import { getRuntimeConfig } from '../lib/runtimeConfig.js'
 import { createSquarePayment, resolvePaymentLink } from '../lib/siteApi.js'
 
 function formatMoney(amountCents) {
@@ -19,7 +19,8 @@ function formatAmountInput(amountCents) {
 }
 
 function getSquareScriptUrl() {
-  const environment = import.meta.env.VITE_SQUARE_ENVIRONMENT?.trim().toLowerCase()
+  const runtimeEnvironment = getRuntimeConfig().square?.environment?.trim().toLowerCase()
+  const environment = runtimeEnvironment || import.meta.env.VITE_SQUARE_ENVIRONMENT?.trim().toLowerCase()
   return environment === 'production'
     ? 'https://web.squarecdn.com/v1/square.js'
     : 'https://sandbox.web.squarecdn.com/v1/square.js'
@@ -48,31 +49,16 @@ function loadSquareSdk() {
   })
 }
 
-function findContribution(serviceName, amountParam) {
-  const amountCents = Number(amountParam)
-  const fromService = serviceOfferings.find((item) => item.title === serviceName)
-
-  return {
-    serviceName: serviceName || 'Selected service',
-    amountCents: Number.isInteger(amountCents) && amountCents > 0 ? amountCents : fromService?.contributionAmountCents || 0,
-    contribution: fromService?.contribution || '',
-    description: fromService?.body || '',
-  }
-}
-
 function PaymentsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const secureToken = searchParams.get('token')?.trim() || ''
   const minimumDonationCents = 5100
-  const initialForm = useMemo(() => {
-    return {
-      name: searchParams.get('name')?.trim() || '',
-      email: searchParams.get('email')?.trim() || '',
-      phone: searchParams.get('phone')?.trim() || '',
-    }
-  }, [searchParams])
-  const [form, setForm] = useState(initialForm)
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+  })
   const [donationAmountCents, setDonationAmountCents] = useState(0)
   const [message, setMessage] = useState('Enter your details and card information.')
   const [cardReady, setCardReady] = useState(false)
@@ -93,8 +79,13 @@ function PaymentsPage() {
       }
     }
 
-    return findContribution(searchParams.get('service') || '', searchParams.get('amount') || '')
-  }, [paymentLink, searchParams])
+    return {
+      serviceName: 'Selected service',
+      amountCents: 0,
+      contribution: '',
+      description: '',
+    }
+  }, [paymentLink])
 
   const amountLabel = formatMoney(selection.amountCents)
   const defaultDonationCents = Math.max(selection.amountCents, minimumDonationCents)
@@ -117,10 +108,6 @@ function PaymentsPage() {
   useEffect(() => {
     setDonationAmountCents(defaultDonationCents)
   }, [defaultDonationCents])
-
-  useEffect(() => {
-    setForm(initialForm)
-  }, [initialForm])
 
   useEffect(() => {
     let cancelled = false
@@ -263,8 +250,9 @@ function PaymentsPage() {
     let cancelled = false
 
     const setupCard = async () => {
-      const appId = import.meta.env.VITE_SQUARE_APP_ID?.trim()
-      const locationId = import.meta.env.VITE_SQUARE_LOCATION_ID?.trim()
+      const runtimeSquare = getRuntimeConfig().square || {}
+      const appId = runtimeSquare.appId?.trim() || import.meta.env.VITE_SQUARE_APP_ID?.trim()
+      const locationId = runtimeSquare.locationId?.trim() || import.meta.env.VITE_SQUARE_LOCATION_ID?.trim()
 
       if (!appId || !locationId) {
         setCardLoadState('error')

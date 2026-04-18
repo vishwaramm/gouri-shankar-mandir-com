@@ -74,6 +74,13 @@ export async function createSquarePayment(payload) {
   })
 }
 
+export async function createPaymentLink(payload) {
+  return requestJson('/api/payment-links', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function sendServicePaymentPage(payload) {
   return requestJson('/api/service-requests/send-payment-page', {
     method: 'POST',

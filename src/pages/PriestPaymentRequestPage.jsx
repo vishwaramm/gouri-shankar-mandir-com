@@ -25,23 +25,9 @@ function getSuggestedAmount(serviceName) {
 }
 
 function buildPaymentLink(request, amountCents) {
-  const params = new URLSearchParams({
-    token: request.paymentLinkToken || '',
-  })
-
-  if (!request.paymentLinkToken) {
-    params.set('service', request.service)
-    params.set('amount', String(amountCents))
-    params.set('name', request.name)
-    params.set('email', request.email)
-    params.set('requestId', request.id)
-
-    if (request.phone) {
-      params.set('phone', request.phone)
-    }
-  }
-
-  return `/payments?${params.toString()}`
+  const token = request.paymentPageToken || request.paymentLinkToken || ''
+  if (!token) return ''
+  return `/payments?token=${encodeURIComponent(token)}`
 }
 
 function PriestPaymentRequestPage() {

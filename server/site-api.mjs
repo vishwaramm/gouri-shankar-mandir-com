@@ -212,6 +212,21 @@ function getConfiguredOrigin(env) {
   return configured ? configured.replace(/\/$/, '') : ''
 }
 
+function getPublicRuntimeConfig(env) {
+  const siteUrl = getConfiguredOrigin(env)
+  const squareEnvironment = env.VITE_SQUARE_ENVIRONMENT?.trim().toLowerCase() || ''
+
+  return {
+    siteUrl,
+    square: {
+      appId: env.VITE_SQUARE_APP_ID?.trim() || '',
+      locationId: env.VITE_SQUARE_LOCATION_ID?.trim() || '',
+      environment: squareEnvironment,
+      configured: Boolean(env.VITE_SQUARE_APP_ID?.trim() && env.VITE_SQUARE_LOCATION_ID?.trim()),
+    },
+  }
+}
+
 function isSameOriginRequest(request, env) {
   const requestOrigin = request.headers.origin?.trim()
   if (!requestOrigin) return true
@@ -361,6 +376,33 @@ async function buildSecurePaymentPageUrl(env, request, payload, db) {
   }
 }
 
+async function createPublicPaymentLink(env, request, payload, db) {
+  const amountCents = Number(payload.amountCents)
+  const service = typeof payload.service === 'string' ? payload.service.trim() : ''
+
+  if (!service || !Number.isInteger(amountCents) || amountCents <= 0) {
+    return { ok: false, reason: 'invalid_payment_link' }
+  }
+
+  const link = await buildSecurePaymentPageUrl(
+    env,
+    request,
+    {
+      type: 'public-service',
+      service,
+      amountCents,
+      note: typeof payload.note === 'string' ? payload.note.trim() : '',
+    },
+    db,
+  )
+
+  return {
+    ok: true,
+    url: link.url,
+    token: link.token,
+  }
+}
+
 async function createSquarePayment(env, { amountCents, sourceId, note, buyerEmailAddress, buyerPhoneNumber }) {
   const accessToken = env.SQUARE_ACCESS_TOKEN?.trim()
   const locationId = env.SQUARE_LOCATION_ID?.trim()
@@ -499,6 +541,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         reviewedAt: item.reviewedAt || '',
         paymentPageSentAt: item.paymentPageSentAt || '',
         paymentPageAmountCents: item.paymentPageAmountCents || 0,
+        paymentPageToken: item.paymentPageToken || '',
         createdAt: item.createdAt,
       })),
       rsvps: rsvps.map((item) => ({
@@ -544,6 +587,31 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         note: entry.note || '',
         createdAt: entry.createdAt || '',
       },
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/payment-links') {
+    const body = await readJsonBody(request)
+    const result = await createPublicPaymentLink(env, request, body, db)
+
+    if (!result.ok) {
+      sendJson(response, 400, { ok: false, message: 'Service and amount are required.' })
+      return true
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      paymentPageUrl: result.url,
+      paymentLinkToken: result.token,
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/runtime-config') {
+    sendJson(response, 200, {
+      ok: true,
+      ...getPublicRuntimeConfig(env),
     })
     return true
   }
@@ -857,6 +925,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       reviewedAt: updatedAt,
       paymentPageSentAt: updatedAt,
       paymentPageAmountCents: amountCents,
+      paymentPageToken: paymentLink.token,
     }
 
     if (usingMongo) {
