@@ -15,7 +15,7 @@ function AboutPage() {
         <div className="hero-backdrop" />
         <div className="hero-veil" />
         <div className="container-xxl hero-grid">
-          <div className="row align-items-end g-5">
+          <div className="row align-items-end g-4">
             <div className="col-lg-8 col-xl-7">
               <div className="reveal">
                 <p className="section-kicker text-white">About</p>
@@ -27,7 +27,7 @@ function AboutPage() {
         </div>
       </section>
 
-      <section className="section-block section-shell">
+      <section className="section-block section-shell about-section">
         <div className="container-xxl">
           <div className="row g-4 align-items-stretch">
             <div className="col-lg-6">
@@ -75,7 +75,7 @@ function AboutPage() {
         </div>
       </section>
 
-      <section className="section-block">
+      <section className="section-block about-section">
         <div className="container-xxl">
           <div className="row g-4 align-items-stretch">
             <div className="col-lg-5">

@@ -18,7 +18,8 @@ const server = http.createServer(async (request, response) => {
     if (!handled) {
       sendJson(response, 404, { ok: false, message: 'Not found.' })
     }
-  } catch {
+  } catch (error) {
+    console.error(`API error for ${request.method} ${pathname}:`, error)
     sendJson(response, 500, { ok: false, message: 'Unable to complete the request.' })
   }
 })

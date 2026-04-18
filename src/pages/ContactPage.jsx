@@ -103,7 +103,7 @@ function ContactPage() {
         <div className="hero-backdrop" />
         <div className="hero-veil" />
         <div className="container-xxl hero-grid">
-          <div className="row align-items-end g-5">
+          <div className="row align-items-end g-4">
             <div className="col-lg-8 col-xl-7">
               <div className="reveal">
                 <p className="section-kicker text-white">Contact</p>
@@ -122,7 +122,7 @@ function ContactPage() {
         </div>
       </section>
 
-      <section className="section-block section-shell">
+      <section className="section-block section-shell contact-section">
         <div className="container-xxl">
           <div className="surface surface-pad">
             <div className="row g-4 align-items-start">
@@ -164,10 +164,10 @@ function ContactPage() {
         </div>
       </section>
 
-      <section className="section-block">
+      <section className="section-block contact-section">
         <div className="container-xxl">
           <div className="surface surface-strong surface-pad">
-              <div className="row g-4 align-items-start">
+            <div className="row g-4 align-items-start">
               <div className="col-lg-4">
                 <p className="section-kicker">Temple mail</p>
                 <h2 className="section-title mb-3">Write directly to the mandir.</h2>
@@ -249,7 +249,7 @@ function ContactPage() {
         </div>
       </section>
 
-      <section className="section-block">
+      <section className="section-block contact-section">
         <div className="container-xxl">
           <div className="surface surface-pad">
             <div className="mb-4">

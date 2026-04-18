@@ -1,6 +1,13 @@
 export const NEWSLETTER_STORAGE_KEY = 'gourishankar.newsletter'
 export const REQUESTS_STORAGE_KEY = 'gourishankar.serviceRequests'
 export const RSVPS_STORAGE_KEY = 'gourishankar.rsvps'
+export {
+  serviceCards,
+  serviceOfferings,
+  serviceContributionGuide,
+  serviceCategories,
+  serviceOptions,
+} from './config/services.js'
 
 export const navItems = [
   { path: '/', label: 'Home' },
@@ -118,60 +125,23 @@ export const resourceDetails = [
   'Links to related organizations and service groups.',
 ]
 
-export const serviceCards = [
+export const serviceBookingSteps = [
   {
-    title: 'Virtual Pooja',
-    category: 'Prayer',
-    keywords: ['pooja', 'devatas', 'devis', 'ritual'],
-    body:
-      'Online pooja for all devatas and devis, with guided preparation and sankalp support.',
+    title: 'Send the request',
+    detail: 'Choose a service, add the date or occasion, and describe the intention.',
   },
   {
-    title: 'Yagnas',
-    category: 'Prayer',
-    keywords: ['yagna', 'fire', 'ritual', 'festival'],
-    body:
-      'All types of yagnas for peace, prosperity, healing, protection, thanksgiving, and major life milestones.',
+    title: 'Priests review it',
+    detail: 'The mandir team confirms what the rite needs, what can be done remotely, and timing.',
   },
   {
-    title: 'Astrology',
-    category: 'Guidance',
-    keywords: ['astrology', 'chart', 'membership', 'consultation'],
-    body:
-      'One-time chart checking, relationship and timing guidance, remedial practices, and membership.',
+    title: 'Contribution is confirmed',
+    detail: 'You receive the suggested dakshina or service fee before the booking is finalized.',
   },
   {
-    title: 'Meditation',
-    category: 'Learning',
-    keywords: ['meditation', 'online meditation', 'calm', 'breath'],
-    body:
-      'Live meditation sessions for beginners and experienced seekers focused on calm, clarity, and devotion.',
+    title: 'The service is carried out',
+    detail: 'Join virtually, receive follow-up guidance, or prepare for the rite at the appointed time.',
   },
-  {
-    title: 'Counseling',
-    category: 'Guidance',
-    keywords: ['counseling', 'support', 'family', 'transition'],
-    body:
-      'Spiritual counseling for life transitions, family concerns, grief, and prayer.',
-  },
-  {
-    title: 'Samskaras',
-    category: 'Rites',
-    keywords: ['samskara', 'ceremony', 'family', 'life event'],
-    body:
-      'Planning and priestly support for all 16 samskaras, from birth rites to marriage and final rites.',
-  },
-]
-
-export const serviceCategories = ['All', 'Prayer', 'Guidance', 'Learning', 'Rites']
-
-export const serviceOptions = [
-  'Virtual Pooja',
-  'Yagna',
-  'Astrology Consultation',
-  'Meditation Session',
-  'Spiritual Counseling',
-  'Samskara Ceremony',
 ]
 
 export const samskaras = [
