@@ -76,6 +76,7 @@ function PaymentsPage() {
   const [donationAmountCents, setDonationAmountCents] = useState(0)
   const [message, setMessage] = useState('Enter your details and card information.')
   const [cardReady, setCardReady] = useState(false)
+  const [cardLoadState, setCardLoadState] = useState('loading')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [paymentLink, setPaymentLink] = useState(null)
   const [paymentLinkLoading, setPaymentLinkLoading] = useState(Boolean(secureToken))
@@ -266,12 +267,14 @@ function PaymentsPage() {
       const locationId = import.meta.env.VITE_SQUARE_LOCATION_ID?.trim()
 
       if (!appId || !locationId) {
+        setCardLoadState('error')
         setMessage('Payment is not configured on this page yet.')
         return
       }
 
       try {
         setCardReady(false)
+        setCardLoadState('loading')
         const Square = await loadSquareSdk()
         if (cancelled) return
 
@@ -287,10 +290,13 @@ function PaymentsPage() {
 
         if (!cancelled) {
           setCardReady(true)
+          setCardLoadState('ready')
           setMessage(`Ready for ${amountLabel}.`)
         }
       } catch (error) {
         if (!cancelled) {
+          setCardLoadState('error')
+          setCardReady(false)
           setMessage(error?.message || 'Payment form could not load.')
         }
       }
@@ -301,6 +307,7 @@ function PaymentsPage() {
     return () => {
       cancelled = true
       setCardReady(false)
+      setCardLoadState('loading')
       if (cardRef.current?.destroy) {
         cardRef.current.destroy().catch(() => {})
       }
@@ -431,7 +438,7 @@ function PaymentsPage() {
                       <label className="form-label fw-semibold">Card details</label>
                       <div className="square-card-shell shadow-sm">
                         <div id="square-card-container" className="square-card-container" />
-                        {!cardReady ? (
+                        {cardLoadState === 'loading' ? (
                           <div className="square-card-skeleton" aria-hidden="true">
                             <div className="square-card-skeleton-line square-card-skeleton-line-lg" />
                             <div className="square-card-skeleton-line" />
@@ -440,6 +447,11 @@ function PaymentsPage() {
                               <div className="square-card-skeleton-chip" />
                               <div className="square-card-skeleton-chip square-card-skeleton-chip-short" />
                             </div>
+                          </div>
+                        ) : null}
+                        {cardLoadState === 'error' ? (
+                          <div className="square-card-error">
+                            {message || 'Payment fields could not load.'}
                           </div>
                         ) : null}
                       </div>
