@@ -18,6 +18,11 @@ function formatAmountInput(amountCents) {
   return (amountCents / 100).toFixed(2)
 }
 
+function parseAmountInput(value) {
+  const parsed = Number(String(value || '').trim())
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null
+}
+
 function getSquareScriptUrl() {
   const runtimeEnvironment = getRuntimeConfig().square?.environment?.trim().toLowerCase()
   const environment = runtimeEnvironment || import.meta.env.VITE_SQUARE_ENVIRONMENT?.trim().toLowerCase()
@@ -53,13 +58,13 @@ function PaymentsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const secureToken = searchParams.get('token')?.trim() || ''
-  const minimumDonationCents = 5100
   const [form, setForm] = useState({
     name: '',
     email: '',
     phone: '',
+    postalCode: '',
   })
-  const [donationAmountCents, setDonationAmountCents] = useState(0)
+  const [donationAmountInput, setDonationAmountInput] = useState('')
   const [message, setMessage] = useState('Enter your details and card information.')
   const [cardReady, setCardReady] = useState(false)
   const [cardLoadState, setCardLoadState] = useState('loading')
@@ -88,7 +93,10 @@ function PaymentsPage() {
   }, [paymentLink])
 
   const amountLabel = formatMoney(selection.amountCents)
+  const minimumDonationCents = selection.amountCents > 0 ? selection.amountCents : 1
   const defaultDonationCents = Math.max(selection.amountCents, minimumDonationCents)
+  const parsedDonationAmountCents = parseAmountInput(donationAmountInput)
+  const donationAmountCents = parsedDonationAmountCents || defaultDonationCents
   const donationAmountLabel = formatMoney(donationAmountCents)
   const paymentThemeVars = {
     '--bs-body-bg': '#f8f9fa',
@@ -106,7 +114,7 @@ function PaymentsPage() {
     '--bs-link-hover-color': '#0a58ca',
   }
   useEffect(() => {
-    setDonationAmountCents(defaultDonationCents)
+    setDonationAmountInput(formatAmountInput(defaultDonationCents))
   }, [defaultDonationCents])
 
   useEffect(() => {
@@ -133,6 +141,7 @@ function PaymentsPage() {
           name: link?.name || '',
           email: link?.email || '',
           phone: link?.phone || '',
+          postalCode: '',
         })
         if (typeof window !== 'undefined') {
           window.history.replaceState({}, '', window.location.pathname)
@@ -162,30 +171,33 @@ function PaymentsPage() {
   }
 
   const handleDonationAmountChange = (event) => {
-    const digitsOnly = event.target.value.replace(/[^\d.]/g, '')
-    if (!digitsOnly) {
-      setDonationAmountCents(minimumDonationCents)
-      return
-    }
+    setDonationAmountInput(event.target.value)
+  }
 
-    const parsed = Number(digitsOnly)
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setDonationAmountCents(minimumDonationCents)
-      return
-    }
-
-    setDonationAmountCents(Math.max(minimumDonationCents, Math.round(parsed * 100)))
+  const handleDonationAmountBlur = () => {
+    const cents = parseAmountInput(donationAmountInput)
+    const normalizedCents = cents && cents >= minimumDonationCents ? cents : minimumDonationCents
+    setDonationAmountInput(formatAmountInput(normalizedCents))
   }
 
   const handleResetDonationAmount = () => {
-    setDonationAmountCents(defaultDonationCents)
+    setDonationAmountInput(formatAmountInput(defaultDonationCents))
   }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
 
-    if (!cardRef.current || donationAmountCents < minimumDonationCents) {
+    if (!cardRef.current) {
       setMessage('Payment form is not ready yet.')
+      return
+    }
+
+    const amountCents = parseAmountInput(donationAmountInput) || donationAmountCents
+
+    if (amountCents < minimumDonationCents) {
+      setMessage(
+        `The donation amount cannot be less than ${formatMoney(minimumDonationCents)}.`,
+      )
       return
     }
 
@@ -200,9 +212,10 @@ function PaymentsPage() {
       if (familyName) billingContact.familyName = familyName
       if (form.email) billingContact.email = form.email
       if (form.phone) billingContact.phone = form.phone
+      if (form.postalCode) billingContact.postalCode = form.postalCode
 
       const tokenResult = await cardRef.current.tokenize({
-        amount: formatAmountInput(donationAmountCents),
+        amount: formatAmountInput(amountCents),
         currencyCode: 'USD',
         intent: 'CHARGE',
         customerInitiated: true,
@@ -222,7 +235,8 @@ function PaymentsPage() {
       setMessage('Submitting payment...')
 
       const paymentResult = await createSquarePayment({
-        amountCents: donationAmountCents,
+        amountCents,
+        paymentLinkToken: secureToken,
         sourceId: tokenResult.token,
         note: selection.description || selection.serviceName,
         buyerEmailAddress: form.email,
@@ -234,8 +248,9 @@ function PaymentsPage() {
         return
       }
 
-      setMessage(`Payment ${String(paymentResult.payment.status || 'completed').toLowerCase()} for ${donationAmountLabel}.`)
-      setForm({ name: '', email: '', phone: '' })
+      setMessage(`Payment ${String(paymentResult.payment.status || 'completed').toLowerCase()} for ${formatMoney(amountCents)}.`)
+      setForm({ name: '', email: '', phone: '', postalCode: '' })
+      setDonationAmountInput(formatAmountInput(defaultDonationCents))
       if (cardRef.current?.clear) {
         await cardRef.current.clear()
       }
@@ -347,21 +362,22 @@ function PaymentsPage() {
                   <div className="list-group list-group-flush">
                     <div className="list-group-item px-0 py-3 d-flex align-items-start justify-content-between gap-3">
                       <div className="min-w-0" style={{ minWidth: 0 }}>
-                        <strong className="d-block mb-1">Virtual Pooja</strong>
+                        <strong className="d-block mb-1">{selection.serviceName}</strong>
                         <span className="text-muted small">Edit the amount if you want to donate more.</span>
                       </div>
                       <div className="flex-shrink-0 text-end">
                         <div className="input-group input-group-sm" style={{ width: '7rem' }}>
                           <span className="input-group-text">$</span>
                           <input
-                            type="number"
+                            type="text"
                             inputMode="decimal"
                             className="form-control text-end"
-                            value={donationAmountCents ? (donationAmountCents / 100).toFixed(2) : ''}
+                            value={donationAmountInput}
                             onChange={handleDonationAmountChange}
-                            min="51.00"
+                            onBlur={handleDonationAmountBlur}
+                            min={formatAmountInput(minimumDonationCents)}
                             step="0.01"
-                            placeholder={(Math.max(selection.amountCents, minimumDonationCents) / 100).toFixed(2)}
+                            placeholder={formatAmountInput(defaultDonationCents)}
                           />
                         </div>
                         <button
@@ -420,6 +436,19 @@ function PaymentsPage() {
                         value={form.phone}
                         onChange={handleChange}
                         placeholder="+1 555 123 4567"
+                      />
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label fw-semibold">ZIP / Postal code</label>
+                      <input
+                        name="postalCode"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="postal-code"
+                        className="form-control"
+                        value={form.postalCode}
+                        onChange={handleChange}
+                        placeholder="90210"
                       />
                     </div>
                     <div className="col-12">

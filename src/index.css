@@ -1589,8 +1589,18 @@ body.modal-open {
   .story-grid,
   .profile-grid,
   .service-grid,
-  .metric-grid,
-  .request-modal-backdrop {
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .support-grid,
+  .story-grid,
+  .profile-grid,
+  .metric-grid {
+    padding: 0.5rem;
+  }
+
+  .service-grid {
     padding: 0.5rem;
   }
 
@@ -1606,6 +1616,42 @@ body.modal-open {
   .service-tile-footer {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .service-tile-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .service-tile-actions .btn {
+    width: 100%;
+  }
+
+  .filter-dock {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .filter-dock .btn,
+  .filter-dock .form-control {
+    width: 100%;
+  }
+
+  .filter-dock .form-control {
+    grid-column: 1 / -1;
+  }
+
+  .chip-cloud {
+    gap: 0.45rem;
+  }
+
+  .services-hero .d-flex.flex-wrap.gap-3.mt-4 {
+    gap: 0.75rem !important;
+  }
+
+  .services-hero .d-flex.flex-wrap.gap-3.mt-4 > .btn {
+    width: 100%;
   }
 }
 
@@ -1624,6 +1670,65 @@ body.modal-open {
 
   .journey-link {
     grid-template-columns: 1fr;
+  }
+
+  .surface-pad {
+    padding: 1rem;
+  }
+
+  .service-tile,
+  .support-item,
+  .story-item,
+  .profile-body {
+    padding: 1rem;
+  }
+
+  .service-tile .service-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .service-price-band {
+    padding: 0.85rem;
+  }
+
+  .service-price-figure {
+    font-size: clamp(1.55rem, 7vw, 2.1rem);
+  }
+
+  .service-tile-actions {
+    gap: 0.5rem;
+  }
+
+  .service-tile-actions .btn {
+    width: 100%;
+  }
+
+  .filter-dock {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-dock .form-control {
+    grid-column: auto;
+  }
+
+  .chip-cloud .stack-chip {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .hero-caption {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    padding: 0.85rem 0.95rem;
+  }
+
+  .home-section .surface-pad,
+  .about-section .surface-pad,
+  .contact-section .surface-pad {
+    padding: 0.9rem;
   }
 
 }

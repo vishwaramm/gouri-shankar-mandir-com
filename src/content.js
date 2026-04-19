@@ -86,14 +86,14 @@ export const historyMilestones = [
 
 export const serviceDetails = [
   {
-    title: 'Pooja for all devatas and devis',
+    title: 'Pooja tiers',
     detail:
-      'Devotional rites for household worship, special requests, festival observance, and daily prayer.',
+      'Short, standard, extended, and custom pooja options are priced by duration.',
   },
   {
-    title: 'All types of yagnas',
+    title: 'Yagna reading',
     detail:
-      'Yagnas for peace, prosperity, protection, healing, and thanksgiving.',
+      'Reading-only yagna support is available for a 1.5-hour session.',
   },
   {
     title: 'Virtual samskaras',
@@ -101,9 +101,9 @@ export const serviceDetails = [
       'Guidance for all sixteen samskaras, including naming, first feeding, study, marriage, and final rites.',
   },
   {
-    title: 'Astrology membership',
+    title: 'Astrology readings',
     detail:
-      'Ongoing chart review, periodic guidance, and remedies for timing and life decisions.',
+      'General one-time readings and special-day reviews for birth, death, and related observances.',
   },
 ]
 

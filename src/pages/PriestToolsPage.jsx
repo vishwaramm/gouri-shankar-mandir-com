@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { loadPriestAuthStatus, loadSiteData, logoutPriestAuth } from '../lib/siteApi.js'
 
@@ -17,16 +17,16 @@ function PriestToolsPage() {
   }, [requests])
   const sentCount = sortedRequests.filter((item) => item.paymentPageSentAt).length
 
-  const refreshAuth = async () => {
+  const refreshAuth = useCallback(async () => {
     const status = await loadPriestAuthStatus()
     setAuth({
       loading: false,
       authenticated: Boolean(status.authenticated),
     })
     return status
-  }
+  }, [])
 
-  const refreshRequests = async () => {
+  const refreshRequests = useCallback(async () => {
     setLoading(true)
     setError('')
 
@@ -43,7 +43,7 @@ function PriestToolsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [navigate])
 
   useEffect(() => {
     refreshAuth()
@@ -58,7 +58,7 @@ function PriestToolsPage() {
         setAuth({ loading: false, authenticated: false })
         navigate('/priest-review', { replace: true })
       })
-  }, [navigate])
+  }, [navigate, refreshAuth, refreshRequests])
 
   const handleLogout = async () => {
     try {

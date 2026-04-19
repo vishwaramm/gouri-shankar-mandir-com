@@ -274,7 +274,7 @@ function PriestCustomPaymentPage() {
                       step="0.01"
                       value={form.amount}
                       onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))}
-                      placeholder="51.00"
+                      placeholder="0.00"
                     />
                   </div>
                 </div>

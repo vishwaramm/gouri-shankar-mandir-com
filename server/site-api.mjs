@@ -1039,6 +1039,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const note = typeof body.note === 'string' ? body.note.trim() : ''
     const buyerEmailAddress = typeof body.buyerEmailAddress === 'string' ? body.buyerEmailAddress.trim() : ''
     const buyerPhoneNumber = typeof body.buyerPhoneNumber === 'string' ? body.buyerPhoneNumber.trim() : ''
+    const paymentLinkToken = typeof body.paymentLinkToken === 'string' ? body.paymentLinkToken.trim() : ''
 
     if (!Number.isInteger(amountCents) || amountCents <= 0 || !sourceId) {
       sendJson(response, 400, {
@@ -1046,6 +1047,20 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         message: 'Amount and payment token are required.',
       })
       return true
+    }
+
+    if (paymentLinkToken) {
+      const paymentLink = await findPaymentLinkByToken(db, paymentLinkToken)
+      const minimumAmountCents =
+        Number.isInteger(paymentLink?.amountCents) && paymentLink.amountCents > 0 ? paymentLink.amountCents : 0
+
+      if (minimumAmountCents > 0 && amountCents < minimumAmountCents) {
+        sendJson(response, 400, {
+          ok: false,
+          message: `The donation amount cannot be less than $${Math.round(minimumAmountCents / 100)}.`,
+        })
+        return true
+      }
     }
 
     const result = await createSquarePayment(env, {

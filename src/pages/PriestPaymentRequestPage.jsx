@@ -20,11 +20,25 @@ function formatMoney(amountCents) {
   }).format(amountCents / 100)
 }
 
+function formatAmountInput(amountCents) {
+  if (!Number.isInteger(amountCents) || amountCents <= 0) return ''
+  return (amountCents / 100).toFixed(2)
+}
+
+function parseAmountInput(value) {
+  const parsed = Number(String(value || '').trim())
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null
+}
+
 function getSuggestedAmount(serviceName) {
   return serviceOfferings.find((item) => item.title === serviceName)?.contributionAmountCents || 0
 }
 
-function buildPaymentLink(request, amountCents) {
+function getMinimumRequestedAmountCents(request) {
+  return Math.max(getSuggestedAmount(request.service), request.paymentPageAmountCents || 0)
+}
+
+function buildPaymentLink(request) {
   const token = request.paymentPageToken || request.paymentLinkToken || ''
   if (!token) return ''
   return `/payments?token=${encodeURIComponent(token)}`
@@ -85,10 +99,12 @@ function PriestPaymentRequestPage() {
       setAmountById((current) => {
         const next = { ...current }
         for (const request of nextRequests) {
-          if (next[request.id]) continue
-          const suggested = request.paymentPageAmountCents || getSuggestedAmount(request.service)
-          if (suggested > 0) {
-            next[request.id] = (suggested / 100).toFixed(2)
+          const minimumAmountCents = getMinimumRequestedAmountCents(request)
+          if (minimumAmountCents <= 0) continue
+
+          const currentAmount = Number(next[request.id])
+          if (!Number.isFinite(currentAmount) || currentAmount * 100 < minimumAmountCents) {
+            next[request.id] = formatAmountInput(minimumAmountCents)
           }
         }
         return next
@@ -176,15 +192,22 @@ function PriestPaymentRequestPage() {
   }
 
   const handleSendPaymentPage = async (request) => {
-    const rawAmount = amountById[request.id] || ''
-    const parsedAmount = Number(rawAmount)
-    const amountCents =
-      Number.isFinite(parsedAmount) && parsedAmount > 0
-        ? Math.max(1, Math.round(parsedAmount * 100))
-        : request.paymentPageAmountCents || getSuggestedAmount(request.service)
-
     if (!request.id) {
-      setStatusById((current) => ({ ...current, [request.email || request.createdAt]: 'Request needs an id before sending.' }))
+      setStatusById((current) => ({
+        ...current,
+        [request.email || request.createdAt]: 'Request needs an id before sending.',
+      }))
+      return
+    }
+
+    const minimumAmountCents = getMinimumRequestedAmountCents(request)
+    const amountCents = parseAmountInput(amountById[request.id]) || minimumAmountCents
+
+    if (amountCents < minimumAmountCents) {
+      setStatusById((current) => ({
+        ...current,
+        [request.id]: `Donation amount cannot be less than ${formatMoney(minimumAmountCents)}.`,
+      }))
       return
     }
 
@@ -227,6 +250,17 @@ function PriestPaymentRequestPage() {
         [request.id]: sendError?.message || 'Unable to send payment page.',
       }))
     }
+  }
+
+  const handleRequestAmountBlur = (request) => {
+    const minimumAmountCents = getMinimumRequestedAmountCents(request)
+    const currentAmountCents = parseAmountInput(amountById[request.id])
+    const nextAmountCents = currentAmountCents && currentAmountCents >= minimumAmountCents ? currentAmountCents : minimumAmountCents
+
+    setAmountById((current) => ({
+      ...current,
+      [request.id]: formatAmountInput(nextAmountCents),
+    }))
   }
 
   return (
@@ -362,7 +396,7 @@ function PriestPaymentRequestPage() {
                     className="btn btn-outline-light rounded-pill"
                     to={buildPaymentLink(
                       selectedRequest,
-                      selectedRequest.paymentPageAmountCents || getSuggestedAmount(selectedRequest.service),
+                      getMinimumRequestedAmountCents(selectedRequest),
                     )}
                   >
                     Open payment page
@@ -393,25 +427,25 @@ function PriestPaymentRequestPage() {
                     <div className="input-group">
                       <span className="input-group-text">$</span>
                       <input
-                        type="number"
+                        type="text"
                         className="form-control"
                         inputMode="decimal"
                         step="0.01"
-                        min="0.01"
+                        min={formatAmountInput(getMinimumRequestedAmountCents(selectedRequest))}
                         value={
-                          amountById[selectedRequest.id] ||
-                          (selectedRequest.paymentPageAmountCents || getSuggestedAmount(selectedRequest.service)
-                            ? ((selectedRequest.paymentPageAmountCents || getSuggestedAmount(selectedRequest.service)) / 100).toFixed(2)
-                            : '')
+                          Object.prototype.hasOwnProperty.call(amountById, selectedRequest.id)
+                            ? amountById[selectedRequest.id]
+                            : formatAmountInput(getMinimumRequestedAmountCents(selectedRequest))
                         }
                         onChange={(event) =>
                           setAmountById((current) => ({ ...current, [selectedRequest.id]: event.target.value }))
                         }
-                        placeholder="0.00"
+                        onBlur={() => handleRequestAmountBlur(selectedRequest)}
+                        placeholder={formatAmountInput(getMinimumRequestedAmountCents(selectedRequest)) || '0.00'}
                       />
                     </div>
                     <div className="form-text text-secondary">
-                      Suggested: {formatMoney(selectedRequest.paymentPageAmountCents || getSuggestedAmount(selectedRequest.service))}
+                      Minimum: {formatMoney(getMinimumRequestedAmountCents(selectedRequest))}
                     </div>
                   </div>
                   <div className="col-md-7">
@@ -504,7 +538,7 @@ function PriestPaymentRequestPage() {
                       </NavLink>
                       <NavLink
                         className="btn btn-link px-0 text-decoration-none"
-                        to={buildPaymentLink(request, request.paymentPageAmountCents || getSuggestedAmount(request.service))}
+                        to={buildPaymentLink(request, getMinimumRequestedAmountCents(request))}
                       >
                         Open payment page
                       </NavLink>

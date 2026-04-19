@@ -14,9 +14,9 @@ const ROUTE_SEO = {
       'Read the story of Gourishankar Mandir, its mission, and the leadership guiding prayer, learning, and service.',
   },
   '/services': {
-    title: `Services | Virtual Pooja, Yagnas, Astrology, and Samskaras`,
+    title: `Services | Pooja, Yagnas, Astrology Readings, and Samskaras`,
     description:
-      'Explore virtual pooja, yagnas, astrology, counseling, meditation, and samskara services with suggested contributions.',
+      'Explore pooja tiers, yagna reading, astrology readings, counseling, meditation, and samskara services with suggested contributions.',
   },
   '/education': {
     title: `Education | Scripture, Meditation, and Devotional Study`,
