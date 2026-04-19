@@ -129,7 +129,17 @@ export function applySeoForPath(pathname, search = '') {
   document.head.querySelector('meta[property="og:site_name"]')?.setAttribute('content', SITE_NAME)
 
   ensureMeta('meta[property="og:image"]', 'property', 'og:image')
-  document.head.querySelector('meta[property="og:image"]')?.setAttribute('content', new URL(SITE_IMAGE, origin).toString())
+  const imageUrl = new URL(SITE_IMAGE, origin).toString()
+  document.head.querySelector('meta[property="og:image"]')?.setAttribute('content', imageUrl)
+
+  ensureMeta('meta[property="og:image:secure_url"]', 'property', 'og:image:secure_url')
+  document.head.querySelector('meta[property="og:image:secure_url"]')?.setAttribute('content', imageUrl)
+
+  ensureMeta('meta[property="og:image:alt"]', 'property', 'og:image:alt')
+  document.head.querySelector('meta[property="og:image:alt"]')?.setAttribute(
+    'content',
+    'Gourishankar Mandir temple view',
+  )
 
   ensureMeta('meta[property="og:url"]', 'property', 'og:url')
   document.head.querySelector('meta[property="og:url"]')?.setAttribute('content', canonical)
@@ -138,9 +148,12 @@ export function applySeoForPath(pathname, search = '') {
   document.head.querySelector('meta[name="twitter:card"]')?.setAttribute('content', 'summary_large_image')
 
   ensureMeta('meta[name="twitter:image"]', 'name', 'twitter:image')
-  document.head.querySelector('meta[name="twitter:image"]')?.setAttribute(
+  document.head.querySelector('meta[name="twitter:image"]')?.setAttribute('content', imageUrl)
+
+  ensureMeta('meta[name="twitter:image:alt"]', 'name', 'twitter:image:alt')
+  document.head.querySelector('meta[name="twitter:image:alt"]')?.setAttribute(
     'content',
-    new URL(SITE_IMAGE, origin).toString(),
+    'Gourishankar Mandir temple view',
   )
 
   ensureMeta('meta[name="twitter:title"]', 'name', 'twitter:title')
