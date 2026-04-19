@@ -37,13 +37,24 @@ function loadSquareSdk() {
 
   const existingScript = document.querySelector('script[data-square-web-payments-sdk="true"]')
   if (existingScript) {
+    console.log('[PaymentsPage] Reusing existing Square SDK script.')
     return new Promise((resolve, reject) => {
-      existingScript.addEventListener('load', () => resolve(window.Square))
-      existingScript.addEventListener('error', () => reject(new Error('Unable to load payment fields.')))
+      const timeout = window.setTimeout(() => {
+        window.clearInterval(interval)
+        reject(new Error('Unable to load payment fields.'))
+      }, 5000)
+      const interval = window.setInterval(() => {
+        if (window.Square) {
+          window.clearTimeout(timeout)
+          window.clearInterval(interval)
+          resolve(window.Square)
+        }
+      }, 50)
     })
   }
 
   return new Promise((resolve, reject) => {
+    console.log('[PaymentsPage] Injecting Square SDK script.')
     const script = document.createElement('script')
     script.src = getSquareScriptUrl()
     script.async = true
@@ -73,6 +84,7 @@ function PaymentsPage() {
   const [paymentLinkLoading, setPaymentLinkLoading] = useState(Boolean(secureToken))
   const [paymentLinkError, setPaymentLinkError] = useState('')
   const cardRef = useRef(null)
+  const amountLabelRef = useRef('')
 
   const selection = useMemo(() => {
     if (paymentLink) {
@@ -114,6 +126,10 @@ function PaymentsPage() {
     '--bs-link-hover-color': '#0a58ca',
   }
   useEffect(() => {
+    amountLabelRef.current = amountLabel
+  }, [amountLabel])
+
+  useEffect(() => {
     setDonationAmountInput(formatAmountInput(defaultDonationCents))
   }, [defaultDonationCents])
 
@@ -128,6 +144,7 @@ function PaymentsPage() {
         return
       }
 
+      console.log('[PaymentsPage] Resolving payment link token:', secureToken)
       setPaymentLinkLoading(true)
       setPaymentLinkError('')
 
@@ -136,6 +153,7 @@ function PaymentsPage() {
         if (cancelled) return
 
         const link = result.paymentLink || null
+        console.log('[PaymentsPage] Payment link resolved:', link)
         setPaymentLink(link)
         setForm({
           name: link?.name || '',
@@ -143,9 +161,6 @@ function PaymentsPage() {
           phone: link?.phone || '',
           postalCode: '',
         })
-        if (typeof window !== 'undefined') {
-          window.history.replaceState({}, '', window.location.pathname)
-        }
       } catch (error) {
         if (cancelled) return
         setPaymentLink(null)
@@ -269,6 +284,12 @@ function PaymentsPage() {
       const appId = runtimeSquare.appId?.trim() || import.meta.env.VITE_SQUARE_APP_ID?.trim()
       const locationId = runtimeSquare.locationId?.trim() || import.meta.env.VITE_SQUARE_LOCATION_ID?.trim()
 
+      console.log('[PaymentsPage] Starting Square card setup.', {
+        hasAppId: Boolean(appId),
+        hasLocationId: Boolean(locationId),
+        amountLabel: amountLabelRef.current,
+      })
+
       if (!appId || !locationId) {
         setCardLoadState('error')
         setMessage('Payment is not configured on this page yet.')
@@ -289,15 +310,18 @@ function PaymentsPage() {
         const card = await payments.card()
         cardRef.current = card
 
+        console.log('[PaymentsPage] Attaching Square card to container.')
         await card.attach('#square-card-container')
 
         if (!cancelled) {
           setCardReady(true)
           setCardLoadState('ready')
-          setMessage(`Ready for ${amountLabel}.`)
+          console.log('[PaymentsPage] Square card ready.')
+          setMessage(`Ready for ${amountLabelRef.current}.`)
         }
       } catch (error) {
         if (!cancelled) {
+          console.log('[PaymentsPage] Square card setup failed:', error)
           setCardLoadState('error')
           setCardReady(false)
           setMessage(error?.message || 'Payment form could not load.')
@@ -316,7 +340,7 @@ function PaymentsPage() {
       }
       cardRef.current = null
     }
-  }, [amountLabel, selection.amountCents])
+  }, [secureToken])
 
   return (
     <main
