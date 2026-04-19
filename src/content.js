@@ -1,318 +1,330 @@
-export const NEWSLETTER_STORAGE_KEY = 'gourishankar.newsletter'
-export const REQUESTS_STORAGE_KEY = 'gourishankar.serviceRequests'
-export const RSVPS_STORAGE_KEY = 'gourishankar.rsvps'
+export const NEWSLETTER_STORAGE_KEY = "gourishankar.newsletter";
+export const REQUESTS_STORAGE_KEY = "gourishankar.serviceRequests";
+export const RSVPS_STORAGE_KEY = "gourishankar.rsvps";
 export {
   serviceCards,
   serviceOfferings,
   serviceContributionGuide,
   serviceCategories,
   serviceOptions,
-} from './config/services.js'
+} from "./config/services.js";
 
 export const navItems = [
-  { path: '/', label: 'Home' },
-  { path: '/about', label: 'About' },
-  { path: '/services', label: 'Services' },
-  { path: '/education', label: 'Education' },
-  { path: '/community', label: 'Community' },
-  { path: '/resources', label: 'Resources' },
-  { path: '/contact', label: 'Contact' },
-]
+  { path: "/", label: "Home" },
+  { path: "/about", label: "About" },
+  { path: "/services", label: "Services" },
+  { path: "/education", label: "Education" },
+  { path: "/community", label: "Community" },
+  { path: "/resources", label: "Resources" },
+  { path: "/contact", label: "Contact" },
+];
 
 export const officers = [
   {
-    name: 'Dr. Gouri Maharaj',
-    role: 'Spiritual Guide',
-    photo: '/images/officers/gouri-maharaj.svg',
+    name: "Dr. Pandit Gouri Maharaj",
+    role: "Spiritual Guide",
+    photo: "/images/officers/gouri-maharaj.png",
     description:
-      'Offers devotional leadership, scriptural insight, and steady guidance for families and daily practice.',
+      "Offers devotional leadership, scriptural insight, and steady guidance for families and daily practice.",
   },
   {
-    name: 'Vishwaram Maharaj',
-    role: 'Temple Director',
-    photo: '/images/officers/vishwaram-maharaj.svg',
+    name: "Pandit Vishwaram Maharaj",
+    role: "Temple Director",
+    photo: "/images/officers/vishwaram-maharaj.jpg",
     description:
-      'Supports the mandir through service coordination, outreach, and religious education.',
+      "Supports the mandir through service coordination, outreach, and religious education.",
   },
   {
-    name: 'Krisen Maharaj',
-    role: 'Community Officer',
-    photo: '/images/officers/krisen-maharaj.svg',
+    name: "Pandit Shriram Maharaj",
+    role: "Community Officer",
+    photo: "/images/officers/shriram-maharaj.jpg",
     description:
-      'Helps devotees with sacred observances, care, and event coordination.',
+      "Helps devotees with sacred observances, care, and event coordination.",
   },
-]
+  {
+    name: "Pandit Shiva D. Maharaj",
+    role: "Cultural Officer",
+    photo: "/images/officers/shiva-d-maharaj.jpg",
+    description:
+      "Supports cultural programs, devotional arts, and temple presentation with a steady public voice.",
+  },
+];
 
 export const missionPillars = [
   {
-    title: 'Preserve tradition',
+    title: "Preserve tradition",
     detail:
-      'Honor Vedic order, temple rhythm, and the meaning behind each ceremony so practice stays grounded.',
+      "Honor Vedic order, temple rhythm, and the meaning behind each ceremony so practice stays grounded.",
   },
   {
-    title: 'Support families',
+    title: "Support families",
     detail:
-      'Give households clear help for milestones, healing, seasonal worship, and daily prayer.',
+      "Give households clear help for milestones, healing, seasonal worship, and daily prayer.",
   },
   {
-    title: 'Make practice simple',
+    title: "Make practice simple",
     detail:
-      'Offer a calm path for learning and prayer so devotion stays close at hand.',
+      "Offer a calm path for learning and prayer so devotion stays close at hand.",
   },
   {
-    title: 'Build community',
-    detail:
-      'Keep satsang, learning, and festivals connected across distance.',
+    title: "Build community",
+    detail: "Keep satsang, learning, and festivals connected across distance.",
   },
-]
+];
 
 export const historyMilestones = [
   {
-    year: 'Founding vision',
+    year: "Founding vision",
     detail:
-      'The mandir began as a commitment to serve devotees beyond a single building or city.',
+      "The mandir began as a commitment to serve devotees beyond a single building or city.",
   },
   {
-    year: 'Expanded outreach',
+    year: "Expanded outreach",
     detail:
-      'Programs were shaped to support prayer, education, and astrology for families seeking accessible spiritual care.',
+      "Programs were shaped to support prayer, education, and astrology for families seeking accessible spiritual care.",
   },
   {
-    year: 'Virtual temple',
+    year: "Virtual temple",
     detail:
-      'A virtual doorway was established for darshan, teaching, and temple connection.',
+      "A virtual doorway was established for darshan, teaching, and temple connection.",
   },
-]
+];
 
 export const serviceDetails = [
   {
-    title: 'Pooja tiers',
+    title: "Pooja tiers",
     detail:
-      'Short, standard, extended, and custom pooja options are priced by duration.',
+      "Short, standard, extended, and custom pooja options are priced by duration.",
   },
   {
-    title: 'Yagna reading',
-    detail:
-      'Reading-only yagna support is available for a 1.5-hour session.',
+    title: "Yagna reading",
+    detail: "Reading-only yagna support is available for a 1.5-hour session.",
   },
   {
-    title: 'Virtual samskaras',
+    title: "Virtual samskaras",
     detail:
-      'Guidance for all sixteen samskaras, including naming, first feeding, study, marriage, and final rites.',
+      "Guidance for all sixteen samskaras, including naming, first feeding, study, marriage, and final rites.",
   },
   {
-    title: 'Astrology readings',
+    title: "Astrology readings",
     detail:
-      'General one-time readings and special-day reviews for birth, death, and related observances.',
+      "General one-time readings and special-day reviews for birth, death, and related observances.",
   },
-]
+];
 
 export const educationThemes = [
-  'Scripture, worship, and observance in clear language.',
-  'Meditation, yoga philosophy, mantra, and devotional discipline.',
-  'Guided practice, lectures, and seasonal teaching.',
-]
+  "Scripture, worship, and observance in clear language.",
+  "Meditation, yoga philosophy, mantra, and devotional discipline.",
+  "Guided practice, lectures, and seasonal teaching.",
+];
 
 export const communityPillars = [
-  'Satsang, reflection, and shared experience.',
-  'Gatherings for classes, rituals, workshops, and observances.',
-  'Membership for regular attendees and ongoing participation.',
-]
+  "Satsang, reflection, and shared experience.",
+  "Gatherings for classes, rituals, workshops, and observances.",
+  "Membership for regular attendees and ongoing participation.",
+];
 
 export const resourceDetails = [
-  'Prayers, sacred texts, chants, and mantras for daily devotion.',
-  'Festival dates and fasting observances for the year.',
-  'Links to related organizations and service groups.',
-]
+  "Prayers, sacred texts, chants, and mantras for daily devotion.",
+  "Festival dates and fasting observances for the year.",
+  "Links to related organizations and service groups.",
+];
 
 export const serviceBookingSteps = [
   {
-    title: 'Send the request',
-    detail: 'Choose a service, add the date or occasion, and describe the intention.',
+    title: "Send the request",
+    detail:
+      "Choose a service, add the date or occasion, and describe the intention.",
   },
   {
-    title: 'Priests review it',
-    detail: 'The mandir team confirms what the rite needs, what can be done remotely, and timing.',
+    title: "Priests review it",
+    detail:
+      "The mandir team confirms what the rite needs, what can be done remotely, and timing.",
   },
   {
-    title: 'Contribution is confirmed',
-    detail: 'You receive the suggested dakshina or service fee before the booking is finalized.',
+    title: "Contribution is confirmed",
+    detail:
+      "You receive the suggested dakshina or service fee before the booking is finalized.",
   },
   {
-    title: 'The service is carried out',
-    detail: 'Join virtually, receive follow-up guidance, or prepare for the rite at the appointed time.',
+    title: "The service is carried out",
+    detail:
+      "Join virtually, receive follow-up guidance, or prepare for the rite at the appointed time.",
   },
-]
+];
 
 export const samskaras = [
-  'Garbhadhana',
-  'Pumsavana',
-  'Simantonnayana',
-  'Jatakarma',
-  'Namakarana',
-  'Nishkramana',
-  'Annaprashana',
-  'Chudakarana',
-  'Karnavedha',
-  'Vidyarambha',
-  'Upanayana',
-  'Vedarambha',
-  'Keshanta',
-  'Samavartana',
-  'Vivaha',
-  'Antyeshti',
-]
+  "Garbhadhana",
+  "Pumsavana",
+  "Simantonnayana",
+  "Jatakarma",
+  "Namakarana",
+  "Nishkramana",
+  "Annaprashana",
+  "Chudakarana",
+  "Karnavedha",
+  "Vidyarambha",
+  "Upanayana",
+  "Vedarambha",
+  "Keshanta",
+  "Samavartana",
+  "Vivaha",
+  "Antyeshti",
+];
 
 export const educationItems = [
-  'Weekly teachings, scripture reflections, and commentaries',
-  'Courses in meditation, yoga philosophy, mantra, and devotional living',
-  'Videos with meditations, lectures, and festival teaching',
-]
+  "Weekly teachings, scripture reflections, and commentaries",
+  "Courses in meditation, yoga philosophy, mantra, and devotional living",
+  "Videos with meditations, lectures, and festival teaching",
+];
 
 export const blogPosts = [
   {
-    title: 'How meditation can live inside a family routine',
-    tag: 'Blog',
+    title: "How meditation can live inside a family routine",
+    tag: "Blog",
   },
   {
-    title: 'Devotion in everyday spiritual life',
-    tag: 'Teachings',
+    title: "Devotion in everyday spiritual life",
+    tag: "Teachings",
   },
   {
-    title: 'Preparing for a virtual pooja with clarity and reverence',
-    tag: 'Guides',
+    title: "Preparing for a virtual pooja with clarity and reverence",
+    tag: "Guides",
   },
-]
+];
 
 export const courses = [
   {
-    title: 'Meditation Foundations',
-    detail: 'Breath, mantra, posture, and concentration for daily practice.',
+    title: "Meditation Foundations",
+    detail: "Breath, mantra, posture, and concentration for daily practice.",
   },
   {
-    title: 'Scripture Study',
-    detail: 'Practical reading of sacred texts with reflection and discussion.',
+    title: "Scripture Study",
+    detail: "Practical reading of sacred texts with reflection and discussion.",
   },
   {
-    title: 'Yoga for Spirit',
-    detail: 'A spiritual approach to steadiness, discipline, and balance.',
+    title: "Yoga for Spirit",
+    detail: "A spiritual approach to steadiness, discipline, and balance.",
   },
-]
+];
 
 export const videoLibrary = [
   {
-    title: 'Guided morning meditation',
-    detail: 'A calm 15-minute practice for beginning the day.',
+    title: "Guided morning meditation",
+    detail: "A calm 15-minute practice for beginning the day.",
   },
   {
-    title: 'Temple teachings archive',
-    detail: 'Recorded explanations and devotional lectures.',
+    title: "Temple teachings archive",
+    detail: "Recorded explanations and devotional lectures.",
   },
   {
-    title: 'Festival preparation series',
-    detail: 'Short videos to help families understand special observances.',
+    title: "Festival preparation series",
+    detail: "Short videos to help families understand special observances.",
   },
-]
+];
 
 export const communityItems = [
-  'Satsang, reflection, and shared learning',
-  'Upcoming observances, workshops, and gatherings',
-  'Membership for classes, archives, and ongoing participation',
-]
+  "Satsang, reflection, and shared learning",
+  "Upcoming observances, workshops, and gatherings",
+  "Membership for classes, archives, and ongoing participation",
+];
 
 export const resourceItems = [
-  'Texts, mantras, bhajans, and daily prayers',
-  'Festival and fasting dates for the year',
-  'Links to charities, partner organizations, and spiritual causes',
-]
+  "Texts, mantras, bhajans, and daily prayers",
+  "Festival and fasting dates for the year",
+  "Links to charities, partner organizations, and spiritual causes",
+];
 
 export const socialChannels = [
-  { label: 'Facebook', detail: 'Community posts and devotional announcements.' },
-  { label: 'Instagram', detail: 'Photo highlights and festival moments.' },
-  { label: 'YouTube', detail: 'Meditations, lectures, and temple teachings.' },
-]
+  {
+    label: "Facebook",
+    detail: "Community posts and devotional announcements.",
+  },
+  { label: "Instagram", detail: "Photo highlights and festival moments." },
+  { label: "YouTube", detail: "Meditations, lectures, and temple teachings." },
+];
 
 export const festivalSchedule = [
   {
-    date: 'Monthly',
-    title: 'Virtual Rudra Abhishek',
-    note: 'Shiva worship with online participation and sankalp.',
+    date: "Monthly",
+    title: "Virtual Rudra Abhishek",
+    note: "Shiva worship with online participation and sankalp.",
   },
   {
-    date: 'Weekly',
-    title: 'Online Meditation Sabha',
-    note: 'Breath, mantra, and stillness practice.',
+    date: "Weekly",
+    title: "Online Meditation Sabha",
+    note: "Breath, mantra, and stillness practice.",
   },
   {
-    date: 'Seasonal',
-    title: 'Festival Yagnas',
-    note: 'Special gatherings for Navratri, Shivratri, Diwali, and other sacred observances.',
+    date: "Seasonal",
+    title: "Festival Yagnas",
+    note: "Special gatherings for Navratri, Shivratri, Diwali, and other sacred observances.",
   },
-]
+];
 
 export const eventSchedule = [
   {
-    title: 'Sunday Meditation Circle',
-    time: 'Sundays, 8:00 AM',
-    detail: 'Breathing practice and reflection for all ages.',
+    title: "Sunday Meditation Circle",
+    time: "Sundays, 8:00 AM",
+    detail: "Breathing practice and reflection for all ages.",
   },
   {
-    title: 'Monthly Temple Q&A',
-    time: 'First Wednesday, 7:00 PM',
-    detail: 'Conversation about rituals, astrology, and spiritual practice.',
+    title: "Monthly Temple Q&A",
+    time: "First Wednesday, 7:00 PM",
+    detail: "Conversation about rituals, astrology, and spiritual practice.",
   },
   {
-    title: 'Festival Preparation Session',
-    time: 'Before major festivals',
-    detail: 'Plan pooja, yagna, and family observances with the mandir team.',
+    title: "Festival Preparation Session",
+    time: "Before major festivals",
+    detail: "Plan pooja, yagna, and family observances with the mandir team.",
   },
-]
+];
 
 export const membershipPlans = [
   {
-    title: 'Community Circle',
-    detail: 'Access to open satsang programs and community gatherings.',
+    title: "Community Circle",
+    detail: "Access to open satsang programs and community gatherings.",
   },
   {
-    title: 'Astrology Membership',
-    detail: 'Astrological guidance, remedies, and periodic chart review.',
+    title: "Astrology Membership",
+    detail: "Astrological guidance, remedies, and periodic chart review.",
   },
   {
-    title: 'Learning Membership',
-    detail: 'Access to classes, teachings, and study resources.',
+    title: "Learning Membership",
+    detail: "Access to classes, teachings, and study resources.",
   },
-]
+];
 
 export const faqItems = [
   {
-    question: 'Can pooja and yagnas be booked virtually?',
+    question: "Can pooja and yagnas be booked virtually?",
     answer:
-      'Yes. Virtual bookings and live participation are available for households anywhere.',
+      "Yes. Virtual bookings and live participation are available for households anywhere.",
   },
   {
-    question: 'Does the mandir support all 16 samskaras?',
+    question: "Does the mandir support all 16 samskaras?",
     answer:
-      'Yes. The mandir presents guidance and planning for all 16 traditional samskaras.',
+      "Yes. The mandir presents guidance and planning for all 16 traditional samskaras.",
   },
   {
-    question: 'What kinds of astrology services are available?',
+    question: "What kinds of astrology services are available?",
     answer:
-      'One-time chart checking, deeper consultations, remedial guidance, and membership are available.',
+      "One-time chart checking, deeper consultations, remedial guidance, and membership are available.",
   },
   {
-    question: 'Does the temple support education and community activities too?',
+    question: "Does the temple support education and community activities too?",
     answer:
-      'Yes. Education, community events, and resources are available alongside worship and learning.',
+      "Yes. Education, community events, and resources are available alongside worship and learning.",
   },
-]
+];
 
 export function readStoredArray(storageKey) {
-  if (typeof window === 'undefined') return []
+  if (typeof window === "undefined") return [];
 
   try {
-    const value = window.localStorage.getItem(storageKey)
-    return value ? JSON.parse(value) : []
+    const value = window.localStorage.getItem(storageKey);
+    return value ? JSON.parse(value) : [];
   } catch {
-    return []
+    return [];
   }
 }
