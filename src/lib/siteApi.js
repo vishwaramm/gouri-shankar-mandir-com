@@ -34,16 +34,32 @@ export async function loadPriestAuthStatus() {
   return requestJson('/api/priest-auth/status')
 }
 
-export async function bootstrapPriestAuth() {
-  return requestJson('/api/priest-auth/bootstrap', {
+export async function loadCurrentUser() {
+  return requestJson('/api/users/me')
+}
+
+export async function loadUserOrders() {
+  return requestJson('/api/users/orders')
+}
+
+export async function lookupOrder(payload) {
+  const params = new URLSearchParams()
+  params.set('code', payload.code || '')
+  if (payload.email) params.set('email', payload.email)
+  return requestJson(`/api/orders/lookup?${params.toString()}`)
+}
+
+export async function loginPriestAuth(payload) {
+  return requestJson('/api/priest-auth/login', {
     method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
-export async function loginPriestAuth(token) {
-  return requestJson('/api/priest-auth/login', {
+export async function requestPriestAccess(payload) {
+  return requestJson('/api/priest-auth/request-access', {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    body: JSON.stringify(payload),
   })
 }
 
@@ -51,6 +67,71 @@ export async function logoutPriestAuth() {
   return requestJson('/api/priest-auth/logout', {
     method: 'POST',
   })
+}
+
+export async function signupUser(payload) {
+  return requestJson('/api/users/signup', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function loginUser(payload) {
+  return requestJson('/api/users/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function logoutUser() {
+  return requestJson('/api/users/logout', {
+    method: 'POST',
+  })
+}
+
+export async function requestPasswordReset(payload) {
+  return requestJson('/api/users/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function resetPassword(payload) {
+  return requestJson('/api/users/reset-password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateUserProfile(payload) {
+  return requestJson('/api/users/profile', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function requestOrderChange(payload) {
+  return requestJson('/api/orders/request-change', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function changeUserPassword(payload) {
+  return requestJson('/api/users/change-password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function resendUserVerification() {
+  return requestJson('/api/users/resend-verification', {
+    method: 'POST',
+  })
+}
+
+export async function verifyUserEmail(token) {
+  return requestJson(`/api/users/verify-email?${new URLSearchParams({ token }).toString()}`)
 }
 
 export async function createNewsletter(email) {
@@ -83,6 +164,34 @@ export async function createPaymentLink(payload) {
 
 export async function sendServicePaymentPage(payload) {
   return requestJson('/api/service-requests/send-payment-page', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function markServiceRequestCompleted(payload) {
+  return requestJson('/api/service-requests/mark-complete', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function processServiceRefund(payload) {
+  return requestJson('/api/service-requests/process-refund', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function processServiceCancellation(payload) {
+  return requestJson('/api/service-requests/process-cancellation', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function syncSquareOrders(payload = {}) {
+  return requestJson('/api/square/sync', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

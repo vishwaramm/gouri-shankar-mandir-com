@@ -1,18 +1,27 @@
 import { useEffect, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
-import { bootstrapPriestAuth, loadPriestAuthStatus, loginPriestAuth } from '../lib/siteApi.js'
+import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
+import { loadPriestAuthStatus, loginPriestAuth, requestPriestAccess } from '../lib/siteApi.js'
 
 function PriestReviewPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const approvalState = searchParams.get('approval')?.trim() || ''
   const [auth, setAuth] = useState({
     loading: true,
     configured: false,
     authenticated: false,
   })
-  const [setupStatus, setSetupStatus] = useState('')
-  const [setupToken, setSetupToken] = useState('')
-  const [setupBusy, setSetupBusy] = useState(false)
-  const [loginToken, setLoginToken] = useState('')
+  const [requestForm, setRequestForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+  })
+  const [requestBusy, setRequestBusy] = useState(false)
+  const [requestStatus, setRequestStatus] = useState('')
+  const [loginForm, setLoginForm] = useState({
+    email: '',
+    password: '',
+  })
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState('')
 
@@ -38,31 +47,52 @@ function PriestReviewPage() {
       })
   }, [navigate])
 
-  const handleBootstrap = async () => {
-    setSetupBusy(true)
-    setSetupStatus('')
-    setSetupToken('')
+  useEffect(() => {
+    if (approvalState === 'approved') {
+      setRequestStatus('The admin request was approved. Sign in with the approved account.')
+    } else if (approvalState === 'invalid') {
+      setRequestStatus('That approval link is invalid or expired.')
+    }
+  }, [approvalState])
+
+  const approvalBadge = (() => {
+    if (approvalState === 'approved') {
+      return { label: 'Approved', className: 'text-bg-success' }
+    }
+    if (approvalState === 'invalid') {
+      return { label: 'Approval link invalid', className: 'text-bg-danger' }
+    }
+    if (requestStatus) {
+      return { label: 'Pending approval', className: 'text-bg-warning text-dark' }
+    }
+    return { label: 'Awaiting request', className: 'text-bg-secondary' }
+  })()
+
+  const handleRequestAccess = async (event) => {
+    event.preventDefault()
+    setRequestBusy(true)
+    setRequestStatus('')
 
     try {
-      const result = await bootstrapPriestAuth()
-      setSetupStatus(result.message || (result.emailed ? 'Access token generated and emailed.' : 'Access token generated.'))
-      setSetupToken(result.token || '')
-      const status = await refreshAuth()
-      if (status.authenticated) {
-        navigate('/priest-tools', { replace: true })
-      }
-    } catch (bootstrapError) {
-      setSetupStatus(bootstrapError?.message || 'Unable to generate access token.')
+      const result = await requestPriestAccess(requestForm)
+      setRequestForm({ name: '', email: '', password: '' })
+      setRequestStatus(
+        result.message ||
+          'Your request was submitted. An approval email was sent to the temple admins.',
+      )
+    } catch (requestError) {
+      setRequestStatus(requestError?.message || 'Unable to submit the request.')
     } finally {
-      setSetupBusy(false)
+      setRequestBusy(false)
     }
   }
 
   const handleLogin = async (event) => {
     event.preventDefault()
-    const token = loginToken.trim()
-    if (!token) {
-      setLoginError('Enter the access token.')
+    const email = loginForm.email.trim().toLowerCase()
+    const password = loginForm.password
+    if (!email || !password) {
+      setLoginError('Enter your email and password.')
       return
     }
 
@@ -70,14 +100,14 @@ function PriestReviewPage() {
     setLoginError('')
 
     try {
-      await loginPriestAuth(token)
-      setLoginToken('')
+      await loginPriestAuth({ email, password })
+      setLoginForm({ email: '', password: '' })
       const status = await refreshAuth()
       if (status.authenticated) {
         navigate('/priest-tools', { replace: true })
       }
     } catch (loginFailure) {
-      setLoginError(loginFailure?.message || 'Invalid token.')
+      setLoginError(loginFailure?.message || 'Invalid credentials.')
     } finally {
       setLoginBusy(false)
     }
@@ -96,10 +126,18 @@ function PriestReviewPage() {
                   <span>Sacred home</span>
                 </span>
               </NavLink>
-              <h1 className="h3 fw-semibold mb-2 mt-3">Priest access</h1>
+              <h1 className="h3 fw-semibold mb-2 mt-3">Admin access</h1>
               <p className="mb-0 text-muted">
-                Generate or enter the access code here. Unlocking takes you to the private tools page.
+                Request admin access first. A temple admin must approve it by email before you can sign in.
               </p>
+              <div className="d-flex flex-wrap gap-2 mt-3">
+                <span className={`badge rounded-pill px-3 py-2 ${approvalBadge.className}`}>{approvalBadge.label}</span>
+              </div>
+            </div>
+            <div className="d-grid gap-2">
+              <button type="button" className="btn admin-refresh-btn rounded-pill px-4" onClick={refreshAuth}>
+                Refresh
+              </button>
             </div>
           </div>
         </div>
@@ -107,72 +145,127 @@ function PriestReviewPage() {
 
       <section className="pb-5">
         <div className="container-xxl">
-          {!auth.loading && !auth.configured ? (
-            <div className="card shadow-sm border mx-auto" style={{ maxWidth: '42rem' }}>
-              <div className="card-body p-4 p-lg-5">
-                <p className="text-uppercase text-muted small fw-semibold mb-2">Setup</p>
-                <h2 className="h4 mb-3">Generate priest access</h2>
-                <p className="text-muted mb-4">
-                  Create the first access code. It will be emailed to the temple inbox and never shown on the page in production.
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-primary rounded-pill px-4"
-                  onClick={handleBootstrap}
-                  disabled={setupBusy}
-                >
-                  {setupBusy ? 'Generating...' : 'Generate access code'}
-                </button>
-                {setupStatus ? <p className="small text-muted mt-3 mb-0">{setupStatus}</p> : null}
-                {setupToken ? (
-                  <div className="mt-3">
-                    <p className="small text-muted mb-2">Access code</p>
-                    <div className="border rounded-3 bg-light p-3 font-monospace small text-break">{setupToken}</div>
+          {requestStatus ? <div className="alert alert-info mx-auto" style={{ maxWidth: '42rem' }}>{requestStatus}</div> : null}
+
+          <div className="row g-4 justify-content-center">
+            <div className="col-lg-6">
+              <div className="card shadow-sm border h-100">
+                <div className="card-body p-4 p-lg-5">
+                  <p className="text-uppercase text-muted small fw-semibold mb-2">Request access</p>
+                  <h2 className="h4 mb-3">Register for admin approval</h2>
+                  <p className="text-muted mb-4">
+                    Submit your name, email, and password. The request goes to the temple admins for approval.
+                  </p>
+                  <form className="d-grid gap-3" onSubmit={handleRequestAccess}>
+                    <div className="row g-3">
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Name</label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          value={requestForm.name}
+                          onChange={(event) => setRequestForm((current) => ({ ...current, name: event.target.value }))}
+                          placeholder="Temple admin name"
+                          autoComplete="name"
+                        />
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Email</label>
+                        <input
+                          type="email"
+                          className="form-control"
+                          value={requestForm.email}
+                          onChange={(event) => setRequestForm((current) => ({ ...current, email: event.target.value }))}
+                          placeholder="admin@example.com"
+                          autoComplete="email"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="form-label fw-semibold">Password</label>
+                      <input
+                        type="password"
+                        className="form-control"
+                        value={requestForm.password}
+                        onChange={(event) =>
+                          setRequestForm((current) => ({ ...current, password: event.target.value }))
+                        }
+                        placeholder="Create a password"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={requestBusy}>
+                      {requestBusy ? 'Submitting...' : 'Request approval'}
+                    </button>
+                  </form>
+                  <div className="small text-muted mt-3">
+                    Approval is required before the account can sign in to the private tools.
                   </div>
-                ) : null}
+                </div>
               </div>
             </div>
-          ) : !auth.authenticated ? (
-            <div className="card shadow-sm border mx-auto" style={{ maxWidth: '42rem' }}>
-              <div className="card-body p-4 p-lg-5">
-                <p className="text-uppercase text-muted small fw-semibold mb-2">Access</p>
-                <h2 className="h4 mb-3">Unlock priest access</h2>
-                <p className="text-muted mb-4">
-                  Enter the access code that was emailed to the temple inbox.
-                </p>
-                <form className="d-grid gap-3" onSubmit={handleLogin}>
-                  <div>
-                    <label className="form-label fw-semibold">Access code</label>
-                    <input
-                      type="password"
-                      className="form-control"
-                      value={loginToken}
-                      onChange={(event) => setLoginToken(event.target.value)}
-                      autoComplete="current-password"
-                      placeholder="Enter access code"
-                    />
-                  </div>
-                  <div className="d-flex flex-wrap gap-3">
-                    <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={loginBusy}>
-                      {loginBusy ? 'Unlocking...' : 'Unlock'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-outline-secondary rounded-pill px-4"
-                      onClick={() => setLoginToken('')}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  {loginError ? <p className="small text-muted mb-0">{loginError}</p> : null}
-                </form>
+
+            <div className="col-lg-6">
+              <div className="card shadow-sm border h-100">
+                <div className="card-body p-4 p-lg-5">
+                  <p className="text-uppercase text-muted small fw-semibold mb-2">Access</p>
+                  <h2 className="h4 mb-3">Admin sign in</h2>
+                  <p className="text-muted mb-4">
+                    Use an approved admin account to open the private tools page.
+                  </p>
+                  {!auth.loading && !auth.configured ? (
+                    <div className="alert alert-warning">
+                      No approved admin account is currently provisioned. Submit a request above and wait for email
+                      approval.
+                    </div>
+                  ) : null}
+                  <form className="d-grid gap-3" onSubmit={handleLogin}>
+                    <div>
+                      <label className="form-label fw-semibold">Email</label>
+                      <input
+                        type="email"
+                        className="form-control"
+                        value={loginForm.email}
+                        onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
+                        autoComplete="email"
+                        placeholder="admin@example.com"
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label fw-semibold">Password</label>
+                      <input
+                        type="password"
+                        className="form-control"
+                        value={loginForm.password}
+                        onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+                        autoComplete="current-password"
+                        placeholder="Enter password"
+                      />
+                    </div>
+                    <div className="d-flex flex-wrap gap-3">
+                      <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={loginBusy}>
+                        {loginBusy ? 'Signing in...' : 'Sign in'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-secondary rounded-pill px-4"
+                        onClick={() => setLoginForm({ email: '', password: '' })}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    {loginError ? <p className="small text-muted mb-0">{loginError}</p> : null}
+                  </form>
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="alert alert-secondary mx-auto" style={{ maxWidth: '42rem' }}>
+          </div>
+
+          {auth.authenticated ? (
+            <div className="alert alert-secondary mx-auto mt-4" style={{ maxWidth: '42rem' }}>
               Access granted. Opening the private tools page...
             </div>
-          )}
+          ) : null}
         </div>
       </section>
     </main>

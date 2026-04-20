@@ -1,6 +1,3 @@
-export const NEWSLETTER_STORAGE_KEY = "gourishankar.newsletter";
-export const REQUESTS_STORAGE_KEY = "gourishankar.serviceRequests";
-export const RSVPS_STORAGE_KEY = "gourishankar.rsvps";
 export {
   serviceCards,
   serviceOfferings,
@@ -16,6 +13,7 @@ export const navItems = [
   { path: "/education", label: "Education" },
   { path: "/community", label: "Community" },
   { path: "/resources", label: "Resources" },
+  { path: "/track-order", label: "Track Order" },
   { path: "/contact", label: "Contact" },
 ];
 
@@ -132,24 +130,44 @@ export const resourceDetails = [
 
 export const serviceBookingSteps = [
   {
-    title: "Send the request",
+    title: "Choose the service",
     detail:
-      "Choose a service, add the date or occasion, and describe the intention.",
+      "Pick the service that matches your need, occasion, or devotional intention.",
   },
   {
-    title: "Priests review it",
+    title: "Review the details",
     detail:
-      "The mandir team confirms what the rite needs, what can be done remotely, and timing.",
+      "Add the date, family details, and any special notes so the priests can prepare properly.",
   },
   {
-    title: "Contribution is confirmed",
+    title: "Sign up or log in",
     detail:
-      "You receive the suggested dakshina or service fee before the booking is finalized.",
+      "Create an account or log in so the order, receipts, and status updates stay in one place.",
   },
   {
-    title: "The service is carried out",
+    title: "Pay the suggested amount",
     detail:
-      "Join virtually, receive follow-up guidance, or prepare for the rite at the appointed time.",
+      "Review the suggested amount, adjust higher if you wish, and submit the payment securely.",
+  },
+  {
+    title: "Get confirmation by email",
+    detail:
+      "You receive a confirmation email with your order code and the next steps after payment.",
+  },
+  {
+    title: "Track the order",
+    detail:
+      "Use the order code to follow review, payment, and completion updates anytime.",
+  },
+  {
+    title: "Priests complete the service",
+    detail:
+      "The priest team carries out the rite at the appointed time and marks it complete.",
+  },
+  {
+    title: "Receive the completion notice",
+    detail:
+      "A final email lets you know the service has been completed and recorded.",
   },
 ];
 
@@ -317,14 +335,3 @@ export const faqItems = [
       "Yes. Education, community events, and resources are available alongside worship and learning.",
   },
 ];
-
-export function readStoredArray(storageKey) {
-  if (typeof window === "undefined") return [];
-
-  try {
-    const value = window.localStorage.getItem(storageKey);
-    return value ? JSON.parse(value) : [];
-  } catch {
-    return [];
-  }
-}

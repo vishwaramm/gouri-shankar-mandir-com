@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  bootstrapPriestAuth,
   loadPriestAuthStatus,
-  loginPriestAuth,
-  logoutPriestAuth,
   sendCustomPaymentPage,
 } from '../lib/siteApi.js'
 
@@ -14,12 +11,6 @@ function PriestCustomPaymentPage() {
     configured: false,
     authenticated: false,
   })
-  const [setupStatus, setSetupStatus] = useState('')
-  const [setupToken, setSetupToken] = useState('')
-  const [setupBusy, setSetupBusy] = useState(false)
-  const [loginToken, setLoginToken] = useState('')
-  const [loginBusy, setLoginBusy] = useState(false)
-  const [loginError, setLoginError] = useState('')
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -47,57 +38,6 @@ function PriestCustomPaymentPage() {
       setAuth({ loading: false, configured: false, authenticated: false })
     })
   }, [])
-
-  const handleBootstrap = async () => {
-    setSetupBusy(true)
-    setSetupStatus('')
-    setSetupToken('')
-
-    try {
-      const result = await bootstrapPriestAuth()
-      setSetupStatus(result.message || (result.emailed ? 'Access token generated and emailed.' : 'Access token generated.'))
-      setSetupToken(result.token || '')
-      await refreshAuth()
-    } catch (bootstrapError) {
-      setSetupStatus(bootstrapError?.message || 'Unable to generate access token.')
-    } finally {
-      setSetupBusy(false)
-    }
-  }
-
-  const handleLogin = async (event) => {
-    event.preventDefault()
-    const token = loginToken.trim()
-    if (!token) {
-      setLoginError('Enter the access token.')
-      return
-    }
-
-    setLoginBusy(true)
-    setLoginError('')
-
-    try {
-      await loginPriestAuth(token)
-      setLoginToken('')
-      await refreshAuth()
-    } catch (loginFailure) {
-      setLoginError(loginFailure?.message || 'Invalid token.')
-    } finally {
-      setLoginBusy(false)
-    }
-  }
-
-  const handleLogout = async () => {
-    try {
-      await logoutPriestAuth()
-    } catch {
-      // Ignore logout failures and reset local state.
-    }
-
-    setAuth((current) => ({ ...current, authenticated: false }))
-    setSubmitStatus('')
-    setSentLink('')
-  }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -148,17 +88,11 @@ function PriestCustomPaymentPage() {
                 </NavLink>
                 <p className="section-kicker mb-3">Private admin</p>
                 <h1 className="display-5 mb-3">Custom payment</h1>
-                <p className="section-intro mb-0">Send a payment page to a customer without using a service request.</p>
+              <p className="section-intro mb-0">Send a payment page to a customer without using a service request.</p>
               </div>
               <div className="col-lg-4">
                 <div className="d-grid gap-2">
-                  <NavLink to="/priest-payment-request" className="btn btn-outline-light rounded-pill px-4">
-                    Payment requests
-                  </NavLink>
-                  <NavLink to="/priest-review" className="btn btn-outline-light rounded-pill px-4">
-                    Back to access
-                  </NavLink>
-                  <button type="button" className="btn btn-primary rounded-pill px-4" onClick={refreshAuth}>
+                  <button type="button" className="btn admin-refresh-btn rounded-pill px-4" onClick={refreshAuth}>
                     Refresh
                   </button>
                 </div>
@@ -166,51 +100,18 @@ function PriestCustomPaymentPage() {
             </div>
           </div>
 
-          {!auth.loading && !auth.configured ? (
-            <div className="surface surface-pad mx-auto mt-4" style={{ maxWidth: '42rem' }}>
-              <p className="section-kicker mb-3">Setup</p>
-              <h2 className="h4 mb-3">Generate priest access</h2>
-              <p className="section-intro mb-4">
-                Create the first access code. It will be emailed to the temple inbox and never shown on the page in production.
-              </p>
-              <button type="button" className="btn btn-primary rounded-pill px-4" onClick={handleBootstrap} disabled={setupBusy}>
-                {setupBusy ? 'Generating...' : 'Generate access code'}
-              </button>
-              {setupStatus ? <p className="small text-secondary mt-3 mb-0">{setupStatus}</p> : null}
-              {setupToken ? (
-                <div className="mt-3">
-                  <p className="small text-secondary mb-2">Access code</p>
-                  <div className="surface surface-soft p-3 font-monospace small text-break">{setupToken}</div>
-                </div>
-              ) : null}
-            </div>
-          ) : !auth.authenticated ? (
+          {!auth.loading && !auth.authenticated ? (
             <div className="surface surface-pad mx-auto mt-4" style={{ maxWidth: '42rem' }}>
               <p className="section-kicker mb-3">Access</p>
-              <h2 className="h4 mb-3">Unlock priest tools</h2>
-              <p className="section-intro mb-4">Enter the access code that was emailed to the temple inbox.</p>
-              <form className="d-grid gap-3" onSubmit={handleLogin}>
-                <div>
-                  <label className="form-label fw-semibold">Access code</label>
-                  <input
-                    type="password"
-                    className="form-control"
-                    value={loginToken}
-                    onChange={(event) => setLoginToken(event.target.value)}
-                    autoComplete="current-password"
-                    placeholder="Enter access code"
-                  />
-                </div>
-                <div className="d-flex flex-wrap gap-3">
-                  <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={loginBusy}>
-                    {loginBusy ? 'Unlocking...' : 'Unlock'}
-                  </button>
-                  <button type="button" className="btn btn-outline-light rounded-pill px-4" onClick={() => setLoginToken('')}>
-                    Clear
-                  </button>
-                </div>
-                {loginError ? <p className="small text-secondary mb-0">{loginError}</p> : null}
-              </form>
+              <h2 className="h4 mb-3">Use the admin login page</h2>
+              <p className="section-intro mb-4">
+                Admin access is now account-based. Create or sign in on the admin page, then come back here.
+              </p>
+              <div className="d-flex flex-wrap gap-3">
+                <button type="button" className="btn admin-refresh-btn rounded-pill px-4" onClick={refreshAuth}>
+                  Refresh
+                </button>
+              </div>
             </div>
           ) : null}
         </div>
@@ -225,13 +126,10 @@ function PriestCustomPaymentPage() {
                   <p className="section-kicker mb-2">Customer payment</p>
                   <h2 className="h4 mb-0">Send a payment page directly to a customer</h2>
                 </div>
-                <button type="button" className="btn btn-outline-light rounded-pill px-4" onClick={handleLogout}>
-                  Lock
-                </button>
               </div>
 
               <div className="surface surface-soft surface-pad mb-4">
-                Use this when you need to collect a custom donation or one-off payment without a service request record.
+                Use this when you need to collect a custom payment or one-off charge without a service request record.
               </div>
 
               <form className="row g-3" onSubmit={handleSubmit}>

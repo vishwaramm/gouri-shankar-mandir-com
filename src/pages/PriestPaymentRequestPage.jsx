@@ -2,11 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { NavLink, useSearchParams } from 'react-router-dom'
 import { serviceOfferings } from '../content.js'
 import {
-  bootstrapPriestAuth,
   loadPriestAuthStatus,
   loadSiteData,
-  loginPriestAuth,
-  logoutPriestAuth,
   sendServicePaymentPage,
 } from '../lib/siteApi.js'
 
@@ -51,17 +48,12 @@ function PriestPaymentRequestPage() {
     configured: false,
     authenticated: false,
   })
-  const [setupStatus, setSetupStatus] = useState('')
-  const [setupToken, setSetupToken] = useState('')
-  const [setupBusy, setSetupBusy] = useState(false)
-  const [loginToken, setLoginToken] = useState('')
-  const [loginBusy, setLoginBusy] = useState(false)
-  const [loginError, setLoginError] = useState('')
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [amountById, setAmountById] = useState({})
   const [noteById, setNoteById] = useState({})
+  const [scheduledForById, setScheduledForById] = useState({})
   const [statusById, setStatusById] = useState({})
   const [paymentUrlById, setPaymentUrlById] = useState({})
 
@@ -94,7 +86,7 @@ function PriestPaymentRequestPage() {
 
     try {
       const data = await loadSiteData()
-      const nextRequests = Array.isArray(data.serviceRequests) ? data.serviceRequests : []
+      const nextRequests = Array.isArray(data.orders) ? data.orders : []
       setRequests(nextRequests)
       setAmountById((current) => {
         const next = { ...current }
@@ -105,6 +97,15 @@ function PriestPaymentRequestPage() {
           const currentAmount = Number(next[request.id])
           if (!Number.isFinite(currentAmount) || currentAmount * 100 < minimumAmountCents) {
             next[request.id] = formatAmountInput(minimumAmountCents)
+          }
+        }
+        return next
+      })
+      setScheduledForById((current) => {
+        const next = { ...current }
+        for (const request of nextRequests) {
+          if (request.scheduledFor && !next[request.id]) {
+            next[request.id] = request.scheduledFor
           }
         }
         return next
@@ -132,65 +133,6 @@ function PriestPaymentRequestPage() {
       })
   }, [])
 
-  const handleBootstrap = async () => {
-    setSetupBusy(true)
-    setSetupStatus('')
-    setSetupToken('')
-
-    try {
-      const result = await bootstrapPriestAuth()
-      setSetupStatus(result.message || (result.emailed ? 'Access token generated and emailed.' : 'Access token generated.'))
-      setSetupToken(result.token || '')
-      const status = await refreshAuth()
-      if (status.authenticated) {
-        await refreshRequests()
-      }
-    } catch (bootstrapError) {
-      setSetupStatus(bootstrapError?.message || 'Unable to generate access token.')
-    } finally {
-      setSetupBusy(false)
-    }
-  }
-
-  const handleLogin = async (event) => {
-    event.preventDefault()
-    const token = loginToken.trim()
-    if (!token) {
-      setLoginError('Enter the access token.')
-      return
-    }
-
-    setLoginBusy(true)
-    setLoginError('')
-
-    try {
-      await loginPriestAuth(token)
-      setLoginToken('')
-      const status = await refreshAuth()
-      if (status.authenticated) {
-        await refreshRequests()
-      }
-    } catch (loginFailure) {
-      setLoginError(loginFailure?.message || 'Invalid token.')
-    } finally {
-      setLoginBusy(false)
-    }
-  }
-
-  const handleLogout = async () => {
-    try {
-      await logoutPriestAuth()
-    } catch {
-      // Ignore logout failures and reset local state.
-    }
-
-    setAuth((current) => ({ ...current, authenticated: false }))
-    setRequests([])
-    setStatusById({})
-    setPaymentUrlById({})
-    setError('')
-  }
-
   const handleSendPaymentPage = async (request) => {
     if (!request.id) {
       setStatusById((current) => ({
@@ -206,7 +148,7 @@ function PriestPaymentRequestPage() {
     if (amountCents < minimumAmountCents) {
       setStatusById((current) => ({
         ...current,
-        [request.id]: `Donation amount cannot be less than ${formatMoney(minimumAmountCents)}.`,
+        [request.id]: `Payment amount cannot be less than ${formatMoney(minimumAmountCents)}.`,
       }))
       return
     }
@@ -218,6 +160,7 @@ function PriestPaymentRequestPage() {
         requestId: request.id,
         amountCents,
         note: noteById[request.id] || '',
+        scheduledFor: scheduledForById[request.id] || request.scheduledFor || '',
       })
 
       setRequests((current) =>
@@ -229,6 +172,7 @@ function PriestPaymentRequestPage() {
                 paymentPageSentAt: result.entry?.paymentPageSentAt || item.paymentPageSentAt || '',
                 paymentPageAmountCents: result.entry?.paymentPageAmountCents || amountCents,
                 paymentLinkToken: result.paymentLinkToken || item.paymentLinkToken || '',
+                scheduledFor: result.entry?.scheduledFor || scheduledForById[request.id] || item.scheduledFor || '',
               }
             : item,
         ),
@@ -283,13 +227,7 @@ function PriestPaymentRequestPage() {
               </div>
               <div className="col-lg-4">
                 <div className="d-grid gap-2">
-                  <NavLink to="/priest-review" className="btn btn-outline-light rounded-pill px-4">
-                    Back to access
-                  </NavLink>
-                  <NavLink to="/priest-custom-payment" className="btn btn-outline-light rounded-pill px-4">
-                    Custom payment
-                  </NavLink>
-                  <button type="button" className="btn btn-primary rounded-pill px-4" onClick={refreshAuth}>
+                  <button type="button" className="btn admin-refresh-btn rounded-pill px-4" onClick={refreshAuth}>
                     Refresh
                   </button>
                 </div>
@@ -297,51 +235,18 @@ function PriestPaymentRequestPage() {
             </div>
           </div>
 
-          {!auth.loading && !auth.configured ? (
-            <div className="surface surface-pad mx-auto mt-4" style={{ maxWidth: '42rem' }}>
-              <p className="section-kicker mb-3">Setup</p>
-              <h2 className="h4 mb-3">Generate priest access</h2>
-              <p className="section-intro mb-4">
-                Create the first access code. It will be emailed to the temple inbox and never shown on the page in production.
-              </p>
-              <button type="button" className="btn btn-primary rounded-pill px-4" onClick={handleBootstrap} disabled={setupBusy}>
-                {setupBusy ? 'Generating...' : 'Generate access code'}
-              </button>
-              {setupStatus ? <p className="small text-secondary mt-3 mb-0">{setupStatus}</p> : null}
-              {setupToken ? (
-                <div className="mt-3">
-                  <p className="small text-secondary mb-2">Access code</p>
-                  <div className="surface surface-soft p-3 font-monospace small text-break">{setupToken}</div>
-                </div>
-              ) : null}
-            </div>
-          ) : !auth.authenticated ? (
+          {!auth.loading && !auth.authenticated ? (
             <div className="surface surface-pad mx-auto mt-4" style={{ maxWidth: '42rem' }}>
               <p className="section-kicker mb-3">Access</p>
-              <h2 className="h4 mb-3">Unlock priest tools</h2>
-              <p className="section-intro mb-4">Enter the access code that was emailed to the temple inbox.</p>
-              <form className="d-grid gap-3" onSubmit={handleLogin}>
-                <div>
-                  <label className="form-label fw-semibold">Access code</label>
-                  <input
-                    type="password"
-                    className="form-control"
-                    value={loginToken}
-                    onChange={(event) => setLoginToken(event.target.value)}
-                    autoComplete="current-password"
-                    placeholder="Enter access code"
-                  />
-                </div>
-                <div className="d-flex flex-wrap gap-3">
-                  <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={loginBusy}>
-                    {loginBusy ? 'Unlocking...' : 'Unlock'}
-                  </button>
-                  <button type="button" className="btn btn-outline-light rounded-pill px-4" onClick={() => setLoginToken('')}>
-                    Clear
-                  </button>
-                </div>
-                {loginError ? <p className="small text-secondary mb-0">{loginError}</p> : null}
-              </form>
+              <h2 className="h4 mb-3">Use the admin login page</h2>
+              <p className="section-intro mb-4">
+                Admin access is now account-based. Create or sign in on the admin page, then come back here.
+              </p>
+              <div className="d-flex flex-wrap gap-3">
+                <button type="button" className="btn admin-refresh-btn rounded-pill px-4" onClick={refreshAuth}>
+                  Refresh
+                </button>
+              </div>
             </div>
           ) : null}
         </div>
@@ -359,9 +264,6 @@ function PriestPaymentRequestPage() {
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                   <span className="badge text-bg-secondary">{sortedRequests.length} requests</span>
                   <span className="badge text-bg-light border text-dark">{sentCount} sent</span>
-                  <button type="button" className="btn btn-outline-light btn-sm rounded-pill" onClick={handleLogout}>
-                    Lock
-                  </button>
                 </div>
               </div>
             </div>
@@ -423,7 +325,7 @@ function PriestPaymentRequestPage() {
 
                 <div className="row g-3 align-items-end mt-1">
                   <div className="col-md-5">
-                    <label className="form-label fw-semibold">Donation amount</label>
+                    <label className="form-label fw-semibold">Payment amount</label>
                     <div className="input-group">
                       <span className="input-group-text">$</span>
                       <input
@@ -457,6 +359,20 @@ function PriestPaymentRequestPage() {
                       onChange={(event) => setNoteById((current) => ({ ...current, [selectedRequest.id]: event.target.value }))}
                       placeholder="Optional note to include in the email"
                     />
+                  </div>
+                  <div className="col-md-5">
+                    <label className="form-label fw-semibold">Target completion date</label>
+                    <input
+                      type="date"
+                      className="form-control"
+                      value={scheduledForById[selectedRequest.id] || selectedRequest.scheduledFor || ''}
+                      onChange={(event) =>
+                        setScheduledForById((current) => ({ ...current, [selectedRequest.id]: event.target.value }))
+                      }
+                    />
+                    <div className="form-text text-secondary">
+                      Optional. This appears in the donor confirmation and order timeline.
+                    </div>
                   </div>
                 </div>
 

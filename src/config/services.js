@@ -121,6 +121,77 @@ const DEFAULT_SERVICE_OFFERINGS = [
   },
 ]
 
+const SERVICE_STYLE_PRESETS = {
+  'Pooja - Less than 1 hour': {
+    accentTone: 'gold',
+    bestFor: 'short household observances and smaller blessings',
+    summary:
+      'A compact pooja for moments when you want a clear, reverent service without a long ceremony.',
+  },
+  'Pooja - 1 to 1.75 hours': {
+    accentTone: 'silver',
+    bestFor: 'birthdays, anniversaries, and fuller home worship',
+    summary:
+      'A more complete home pooja with enough time for prayer, sankalp, and family support.',
+  },
+  'Pooja - 2 to 2.5 hours': {
+    accentTone: 'platinum',
+    bestFor: 'larger ceremonies and fuller ritual observance',
+    summary:
+      'An extended pooja for occasions that need additional prayer time, coordination, and presence.',
+  },
+  'Pooja - Over 2.5 hours': {
+    accentTone: 'copper',
+    bestFor: 'custom rites that need priest review first',
+    summary:
+      'A longer ceremony quoted case by case so the mandir can prepare the right support for your request.',
+  },
+  'Yagnas - Reading Only': {
+    accentTone: 'ruby',
+    bestFor: 'peace, prosperity, healing, and thanksgiving',
+    summary:
+      'Reading-only yagna support for moments when you want the guidance and recitation without a full fire rite.',
+  },
+  'Astrology Reading - General': {
+    accentTone: 'sapphire',
+    bestFor: 'timing, relationships, and practical guidance',
+    summary:
+      'A thoughtful one-time reading for chart review, timing, and next-step recommendations.',
+  },
+  'Astrology Reading - Special Days': {
+    accentTone: 'emerald',
+    bestFor: 'birth, death, and observance dates',
+    summary:
+      'A focused reading for special dates when the context matters and the guidance should be precise.',
+  },
+  Meditation: {
+    accentTone: 'jade',
+    bestFor: 'steady practice and devotional calm',
+    summary:
+      'Live meditation sessions for seekers who want a calm, guided practice with practical follow-through.',
+  },
+  Counseling: {
+    accentTone: 'amethyst',
+    bestFor: 'life transitions and family concerns',
+    summary:
+      'Spiritual counseling for private questions, grief, family matters, and prayerful next steps.',
+  },
+  Samskaras: {
+    accentTone: 'rose',
+    bestFor: 'rites of passage and milestone planning',
+    summary:
+      'Planning and priestly support for the major rites of passage that deserve careful preparation.',
+  },
+}
+
+function getServiceStyle(entry) {
+  return SERVICE_STYLE_PRESETS[entry.title] || {
+    accentTone: entry.category === 'Guidance' ? 'sapphire' : 'gold',
+    bestFor: entry.body || '',
+    summary: entry.body || '',
+  }
+}
+
 function parseServiceConfig() {
   const raw = import.meta.env.VITE_SERVICE_CONFIG_JSON?.trim()
   if (!raw) return {}
@@ -133,11 +204,15 @@ function parseServiceConfig() {
 }
 
 function normalizeOffering(entry) {
+  const style = getServiceStyle(entry)
+
   return {
     title: entry.title || '',
     category: entry.category || 'General',
     keywords: Array.isArray(entry.keywords) ? entry.keywords.filter(Boolean).map(String) : [],
     body: entry.body || '',
+    summary: entry.summary || style.summary || entry.body || '',
+    bestFor: entry.bestFor || style.bestFor || '',
     includes: Array.isArray(entry.includes) ? entry.includes.filter(Boolean).map(String) : [],
     contribution: entry.contribution || 'Custom quote',
     contributionAmountCents:
@@ -146,6 +221,7 @@ function normalizeOffering(entry) {
         : null,
     timing: entry.timing || '',
     delivery: entry.delivery || '',
+    accentTone: entry.accentTone || style.accentTone || 'gold',
   }
 }
 
@@ -176,7 +252,7 @@ function buildContributionGuide(offerings) {
       detail: `${items.map((item) => item.title).join(', ')}`,
       amount,
       amountCents,
-      squareName: `${category} service donation`,
+      squareName: `${category} service payment`,
     }
   })
 }

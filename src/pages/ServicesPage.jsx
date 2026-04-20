@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   samskaras,
   serviceBookingSteps,
@@ -41,6 +41,38 @@ const initialRequest = {
   note: '',
 }
 
+function getServiceJourneyCopy(card) {
+  const serviceName = card?.title || 'this service'
+
+  switch (card?.category) {
+    case 'Prayer':
+      return {
+        prep: `Share the names, date, and any sankalp details for ${serviceName}.`,
+        next: 'Our priests review the rite, confirm the contribution, and send the payment page.',
+      }
+    case 'Guidance':
+      return {
+        prep: `Send your chart notes, special dates, or questions before ${serviceName}.`,
+        next: 'We review the request, confirm timing, and send the next step by email.',
+      }
+    case 'Learning':
+      return {
+        prep: `Choose one-time or recurring support for ${serviceName} and add any goals.`,
+        next: 'We confirm the session format and send a simple follow-up plan.',
+      }
+    case 'Rites':
+      return {
+        prep: `Share the milestone date early so ${serviceName} can be planned carefully.`,
+        next: 'We coordinate the rite, outline the preparation, and keep you updated by email.',
+      }
+    default:
+      return {
+        prep: `Begin ${serviceName} by sharing the details you already know.`,
+        next: 'The priest team will review your request and confirm the next step by email.',
+      }
+  }
+}
+
 function formatMoney(amountCents) {
   if (!Number.isInteger(amountCents) || amountCents <= 0) return 'Custom quote'
 
@@ -53,13 +85,23 @@ function formatMoney(amountCents) {
 
 function ServicesPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [serviceCategory, setServiceCategory] = useState('All')
   const [serviceQuery, setServiceQuery] = useState('')
-  const [serviceRequest, setServiceRequest] = useState(initialRequest)
-  const [requestModalOpen, setRequestModalOpen] = useState(false)
-  const [requestStatus, setRequestStatus] = useState(
-    'Free inquiry. Contribution is confirmed after priest review.',
+  const selectedServiceTitle = searchParams.get('service')
+  const selectedService = serviceOfferings.find((card) => card.title === selectedServiceTitle)
+  const [serviceRequest, setServiceRequest] = useState(() => ({
+    ...initialRequest,
+    service: selectedService?.title ?? initialRequest.service,
+  }))
+  const [requestModalOpen, setRequestModalOpen] = useState(() => Boolean(selectedService))
+  const [activeBookingStep, setActiveBookingStep] = useState(0)
+  const [requestStatus, setRequestStatus] = useState(() =>
+    selectedService
+      ? `Selected ${selectedService.title}.`
+      : 'Free inquiry. Contribution is confirmed after priest review.',
   )
+  const [requestOutcome, setRequestOutcome] = useState(null)
 
   const filteredServices = useMemo(() => {
     const query = serviceQuery.trim().toLowerCase()
@@ -88,6 +130,7 @@ function ServicesPage() {
   const openRequestModal = (service) => {
     setServiceRequest((current) => ({ ...current, service }))
     setRequestStatus(`Selected ${service}.`)
+    setRequestOutcome(null)
     setRequestModalOpen(true)
   }
 
@@ -98,7 +141,7 @@ function ServicesPage() {
     })
 
     if (!result.paymentLinkToken) {
-      throw new Error('Unable to start the donation page.')
+      throw new Error('Unable to start the payment page.')
     }
 
     navigate(`/payments?token=${encodeURIComponent(result.paymentLinkToken)}`)
@@ -106,6 +149,7 @@ function ServicesPage() {
 
   const closeRequestModal = () => {
     setRequestModalOpen(false)
+    setRequestOutcome(null)
   }
 
   const handleServiceRequestSubmit = (event) => {
@@ -118,6 +162,7 @@ function ServicesPage() {
 
     createServiceRequest(payload)
       .then((result) => {
+        const orderCode = result.orderCode || result.entry?.orderCode || ''
         setRequestStatus(
           result.emailed === false
             ? result.mailStatus === 'missing_smtp'
@@ -127,6 +172,15 @@ function ServicesPage() {
                 : 'Saved. Mail delivery failed.'
             : 'Received. We will confirm the contribution and timing by email.',
         )
+        setRequestOutcome({
+          orderCode,
+          trackUrl: result.trackUrl || (orderCode ? `/track-order?code=${encodeURIComponent(orderCode)}` : ''),
+          emailSent: result.confirmationEmailSent,
+          message:
+            result.emailed === false
+              ? 'Your request was saved.'
+              : 'Your request was received and emailed to the priest team.',
+        })
         setServiceRequest(initialRequest)
       })
       .catch(() => {
@@ -152,6 +206,18 @@ function ServicesPage() {
     }
   }, [requestModalOpen])
 
+  useEffect(() => {
+    if (serviceBookingSteps.length < 2) return undefined
+
+    const interval = window.setInterval(() => {
+      setActiveBookingStep((current) => (current + 1) % serviceBookingSteps.length)
+    }, 6000)
+
+    return () => window.clearInterval(interval)
+  }, [])
+
+  const activeStep = serviceBookingSteps[activeBookingStep] || serviceBookingSteps[0]
+
   return (
     <main>
       <section
@@ -167,11 +233,13 @@ function ServicesPage() {
         <div className="hero-veil" />
         <div className="container-xxl hero-grid">
           <div className="row align-items-end g-5">
-            <div className="col-lg-8 col-xl-7">
+            <div className="col-lg-7 col-xl-7">
               <div className="reveal">
                 <p className="section-kicker text-white">Services</p>
-                <h1 className="hero-title text-white">Sacred services.</h1>
-                <p className="hero-lede mt-4">Prayer, guidance, and rites for household observance.</p>
+                <h1 className="hero-title text-white">Find the rite that fits the moment.</h1>
+                <p className="hero-lede mt-4">
+                  Request prayer, guidance, or a rite of passage. We’ll help you choose, confirm the contribution, and keep the order clear.
+                </p>
                 <div className="d-flex flex-wrap gap-3 mt-4">
                   <button
                     type="button"
@@ -180,7 +248,7 @@ function ServicesPage() {
                       document.getElementById('service-discovery')?.scrollIntoView({ behavior: 'smooth' })
                     }
                   >
-                    Donate now
+                    Browse services
                   </button>
                   <button
                     type="button"
@@ -191,54 +259,69 @@ function ServicesPage() {
                   </button>
                 </div>
                 <p className="hero-lede mt-3 mb-0">
-                  Browse the service cards below to see suggested contributions and donate directly.
+                  Free inquiry first, then a clear suggested contribution, order code, and completion notice.
                 </p>
                 <div className="chip-cloud mt-4">
-                  <span className="stack-chip">Virtual pooja</span>
-                  <span className="stack-chip">Yagnas</span>
-                  <span className="stack-chip">Astrology</span>
-                  <span className="stack-chip">Samskaras</span>
+                  <span className="stack-chip">Free inquiry</span>
+                  <span className="stack-chip">Order code by email</span>
+                  <span className="stack-chip">Completion notice</span>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      </section>
 
-      <section className="section-shell py-3 py-lg-4">
-        <div className="container-xxl">
-          <div className="surface surface-pad mb-0">
-            <div className="row g-4 align-items-end mb-3">
-              <div className="col-lg-5">
-                <p className="section-kicker">How it works</p>
-                <h2 className="section-title mb-0">A simple path from request to service.</h2>
-              </div>
-              <div className="col-lg-7">
-                <p className="section-intro mb-0">
-                  Choose a service, share the intention, and the priests review the request before the
-                  contribution is confirmed.
-                </p>
-              </div>
-            </div>
-            <div className="row g-3 row-cols-1 row-cols-md-2 row-cols-xl-4">
-              {serviceBookingSteps.map((step, index) => (
-                <div className="col" key={step.title}>
-                  <article className="card h-100 shadow-sm border-secondary-subtle">
-                    <div className="card-body d-flex flex-column gap-3">
-                      <div className="d-flex align-items-center justify-content-between gap-3">
-                        <span className="badge rounded-pill text-bg-primary px-3 py-2">
-                          {String(index + 1).padStart(2, '0')}
-                        </span>
-                        <span className="text-uppercase small text-muted fw-semibold">Step</span>
-                      </div>
-                      <div>
-                        <h3 className="h5 card-title mb-2">{step.title}</h3>
-                        <p className="card-text text-muted mb-0">{step.detail}</p>
-                      </div>
-                    </div>
-                  </article>
+            <div className="col-lg-5 col-xl-5">
+              <div className="service-hero-carousel reveal delay-1">
+                <div className="service-hero-carousel-head">
+                  <div>
+                    <p className="service-hero-kicker mb-1">How it works</p>
+                    <h2 className="service-hero-title mb-0">A simple path from request to completion.</h2>
+                  </div>
+                  <div className="service-hero-count">
+                    <span>Step</span>
+                    <strong>{String(activeBookingStep + 1).padStart(2, '0')}</strong>
+                  </div>
                 </div>
-              ))}
+
+                <div className="service-hero-slide" key={activeBookingStep}>
+                  <div className="service-hero-slide-number">{String(activeBookingStep + 1).padStart(2, '0')}</div>
+                  <div className="service-hero-slide-body">
+                    <h3 className="h4 mb-2">{activeStep.title}</h3>
+                    <p className="mb-0 text-secondary">{activeStep.detail}</p>
+                  </div>
+                </div>
+
+                <div className="service-hero-nav" aria-label="Service flow slideshow controls">
+                  <button
+                    type="button"
+                    className="service-hero-arrow"
+                    onClick={() =>
+                      setActiveBookingStep((current) => (current - 1 + serviceBookingSteps.length) % serviceBookingSteps.length)
+                    }
+                    aria-label="Previous step"
+                  >
+                    ←
+                  </button>
+                  <div className="service-hero-dots">
+                    {serviceBookingSteps.map((step, index) => (
+                      <button
+                        key={step.title}
+                        type="button"
+                        className={index === activeBookingStep ? 'service-hero-dot is-active' : 'service-hero-dot'}
+                        onClick={() => setActiveBookingStep(index)}
+                        aria-label={`Show step ${index + 1}: ${step.title}`}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="service-hero-arrow"
+                    onClick={() => setActiveBookingStep((current) => (current + 1) % serviceBookingSteps.length)}
+                    aria-label="Next step"
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -250,9 +333,12 @@ function ServicesPage() {
             <div className="row g-4 align-items-end">
               <div className="col-lg-5">
                 <p className="section-kicker">Discover</p>
-                <h2 className="section-title mb-0">Find the right service path.</h2>
+                <h2 className="section-title mb-0">Choose the rite that fits the moment.</h2>
               </div>
               <div className="col-lg-7">
+                <p className="section-intro mb-3">
+                  Every card shows the suggested contribution, the service style, and a simple way to begin.
+                </p>
                 <div className="filter-dock justify-content-lg-end">
                   {serviceCategories.map((category) => (
                     <button
@@ -273,7 +359,7 @@ function ServicesPage() {
                     type="search"
                     value={serviceQuery}
                     onChange={(event) => setServiceQuery(event.target.value)}
-                    placeholder="Search rite, guidance, or follow-up"
+                    placeholder="Search prayer, reading, or rite"
                     style={{ maxWidth: '22rem' }}
                   />
                 </div>
@@ -281,10 +367,77 @@ function ServicesPage() {
             </div>
           </div>
 
+          <div className="surface surface-soft surface-pad mb-4">
+            <div className="row g-3 align-items-center">
+              <div className="col-lg-4">
+                <p className="section-kicker mb-2">Why families book here</p>
+                <h2 className="h4 mb-0">Three reasons the flow feels easier.</h2>
+              </div>
+              <div className="col-lg-8">
+                <div className="row g-3">
+                  <div className="col-md-4">
+                    <div className="surface surface-strong surface-pad h-100">
+                      <div className="fw-semibold mb-1">Order code</div>
+                      <p className="small text-secondary mb-0">Keeps the request easy to find from the first email to the final notice.</p>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="surface surface-strong surface-pad h-100">
+                      <div className="fw-semibold mb-1">Payment confirmation</div>
+                      <p className="small text-secondary mb-0">Shows the suggested amount up front so the next step is obvious.</p>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="surface surface-strong surface-pad h-100">
+                      <div className="fw-semibold mb-1">Completion notice</div>
+                      <p className="small text-secondary mb-0">Lets you know when the rite has been completed and recorded.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="surface surface-soft surface-pad mb-4">
+            <div className="row g-3 align-items-end">
+              <div className="col-lg-5">
+                <p className="section-kicker mb-2">Start here</p>
+                <h2 className="h4 mb-0">If you are unsure, begin with one of these.</h2>
+              </div>
+              <div className="col-lg-7">
+                <p className="text-secondary mb-0">
+                  These are the easiest choices for families who want a clear path before opening the full request form.
+                </p>
+              </div>
+            </div>
+            <div className="row g-3 mt-2">
+              {serviceOfferings.slice(0, 3).map((card) => (
+                <div className="col-md-4" key={`starter-${card.title}`}>
+                  <article className={`surface surface-strong surface-pad h-100 service-tone-${card.accentTone}`}>
+                    <div className="section-kicker mb-2">{card.category}</div>
+                    <h3 className="h5 mb-2">{card.title}</h3>
+                    <p className="mb-3 text-secondary">{card.summary}</p>
+                    <div className="fw-semibold mb-3">{formatMoney(card.contributionAmountCents)}</div>
+                    <button
+                      type="button"
+                      className="btn btn-outline-primary rounded-pill px-4"
+                      onClick={() => openRequestModal(card.title)}
+                    >
+                      Request this
+                    </button>
+                    <p className="small text-secondary mt-3 mb-0 service-policy-note">
+                      Refund or cancellation requests can be submitted from your order page after review.
+                    </p>
+                  </article>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="service-grid mb-4">
             {filteredServices.map((card, index) => (
               <article
-                className="service-tile reveal"
+                className={`service-tile service-tone-${card.accentTone} reveal`}
                 key={card.title}
                 style={{ animationDelay: `${index * 70}ms` }}
               >
@@ -298,13 +451,16 @@ function ServicesPage() {
                   <strong className="service-price-figure">{formatMoney(card.contributionAmountCents)}</strong>
                   <span className="service-price-copy">{card.contribution}</span>
                 </div>
-                <p>{card.body}</p>
+                <p className="service-summary-copy">{card.summary}</p>
                 <ul className="service-point-list">
-                  {card.includes.map((item) => (
+                  {card.includes.slice(0, 2).map((item) => (
                     <li key={item}>{item}</li>
                   ))}
+                  {card.includes.length > 2 ? (
+                    <li className="text-secondary">And {card.includes.length - 2} more included details.</li>
+                  ) : null}
                 </ul>
-                  <div className="service-tile-footer">
+                <div className="service-tile-footer">
                   <div className="service-tile-actions">
                     <button
                       type="button"
@@ -318,22 +474,22 @@ function ServicesPage() {
 
                           openRequestModal(card.title)
                         } catch {
-                          setRequestStatus('Unable to open the donation page right now.')
+                          setRequestStatus('Unable to open the payment page right now.')
                           setRequestModalOpen(true)
                         }
                       }}
                     >
-                      {card.contributionAmountCents ? 'Donate now' : 'Request quote'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-outline-primary rounded-pill"
-                      onClick={() => openRequestModal(card.title)}
-                    >
-                      Use this service
+                      {card.contributionAmountCents ? 'Start this service' : 'Request quote'}
                     </button>
                   </div>
+                  <p className="small text-secondary mt-3 mb-0 service-policy-note">
+                    Refund and cancellation requests are available from your order page after the request is reviewed.
+                  </p>
                   <p className="service-timing">{card.timing}</p>
+                  <div className="service-prep-note mt-3">
+                    <div className="small text-secondary text-uppercase mb-1">How to begin</div>
+                    <div className="fw-semibold">{getServiceJourneyCopy(card).prep}</div>
+                  </div>
                 </div>
               </article>
             ))}
@@ -445,12 +601,12 @@ function ServicesPage() {
             aria-labelledby="serviceRequestDialogTitle"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="request-modal-header">
-              <div>
-                <p className="section-kicker">Request form</p>
-                <h2 id="serviceRequestDialogTitle" className="h3 mb-2">
-                  Request {serviceRequest.service}
-                </h2>
+              <div className="request-modal-header">
+                <div>
+                  <p className="section-kicker">Request form</p>
+                  <h2 id="serviceRequestDialogTitle" className="h3 mb-2">
+                    Request {serviceRequest.service}
+                  </h2>
               </div>
               <button
                 type="button"
@@ -460,9 +616,31 @@ function ServicesPage() {
               >
                 Close
               </button>
-            </div>
+              </div>
 
-            <form className="row g-3 mt-1" onSubmit={handleServiceRequestSubmit}>
+              {requestOutcome ? (
+                <div className="surface surface-soft surface-pad mt-3">
+                  <div className="section-kicker mb-2">Request received</div>
+                  <div className="d-grid gap-2">
+                    <div className="fw-semibold">{requestOutcome.message}</div>
+                    {requestOutcome.orderCode ? (
+                      <div className="text-secondary">Order code: {requestOutcome.orderCode}</div>
+                    ) : null}
+                  </div>
+                  <div className="d-flex flex-wrap gap-2 mt-3">
+                    {requestOutcome.trackUrl ? (
+                      <NavLink className="btn btn-primary rounded-pill px-4" to={requestOutcome.trackUrl}>
+                        Track order
+                      </NavLink>
+                    ) : null}
+                    <button type="button" className="btn btn-outline-primary rounded-pill px-4" onClick={closeRequestModal}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <form className="row g-3 mt-1" onSubmit={handleServiceRequestSubmit}>
               <div className="col-md-6">
                 <label className="form-label fw-semibold text-primary-emphasis">Service</label>
                 <select

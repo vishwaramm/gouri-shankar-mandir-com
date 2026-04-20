@@ -1,15 +1,17 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { faqItems } from '../content.js'
 import { createContactMessage, createNewsletter } from '../lib/siteApi.js'
 
 function ContactPage() {
+  const [searchParams] = useSearchParams()
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [faqOpen, setFaqOpen] = useState(0)
   const [directEmail, setDirectEmail] = useState({
     name: '',
     email: '',
-    subject: '',
-    message: '',
+    subject: searchParams.get('subject')?.trim() || '',
+    message: searchParams.get('message')?.trim() || '',
   })
   const [emailStatus, setEmailStatus] = useState({
     type: 'idle',

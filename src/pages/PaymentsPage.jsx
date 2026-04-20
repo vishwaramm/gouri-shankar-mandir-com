@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
 import { getRuntimeConfig } from '../lib/runtimeConfig.js'
-import { createSquarePayment, resolvePaymentLink } from '../lib/siteApi.js'
+import { createSquarePayment, loadCurrentUser, resolvePaymentLink } from '../lib/siteApi.js'
 
 function formatMoney(amountCents) {
   if (!Number.isInteger(amountCents) || amountCents <= 0) return 'Custom quote'
@@ -75,7 +75,7 @@ function PaymentsPage() {
     phone: '',
     postalCode: '',
   })
-  const [donationAmountInput, setDonationAmountInput] = useState('')
+  const [paymentAmountInput, setPaymentAmountInput] = useState('')
   const [message, setMessage] = useState('Enter your details and card information.')
   const [cardReady, setCardReady] = useState(false)
   const [cardLoadState, setCardLoadState] = useState('loading')
@@ -83,6 +83,9 @@ function PaymentsPage() {
   const [paymentLink, setPaymentLink] = useState(null)
   const [paymentLinkLoading, setPaymentLinkLoading] = useState(Boolean(secureToken))
   const [paymentLinkError, setPaymentLinkError] = useState('')
+  const [paymentOutcome, setPaymentOutcome] = useState(null)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [currentUserLoading, setCurrentUserLoading] = useState(true)
   const cardRef = useRef(null)
   const amountLabelRef = useRef('')
 
@@ -105,11 +108,11 @@ function PaymentsPage() {
   }, [paymentLink])
 
   const amountLabel = formatMoney(selection.amountCents)
-  const minimumDonationCents = selection.amountCents > 0 ? selection.amountCents : 1
-  const defaultDonationCents = Math.max(selection.amountCents, minimumDonationCents)
-  const parsedDonationAmountCents = parseAmountInput(donationAmountInput)
-  const donationAmountCents = parsedDonationAmountCents || defaultDonationCents
-  const donationAmountLabel = formatMoney(donationAmountCents)
+  const minimumPaymentCents = selection.amountCents > 0 ? selection.amountCents : 1
+  const defaultPaymentCents = Math.max(selection.amountCents, minimumPaymentCents)
+  const parsedPaymentAmountCents = parseAmountInput(paymentAmountInput)
+  const paymentAmountCents = parsedPaymentAmountCents || defaultPaymentCents
+  const paymentAmountLabel = formatMoney(paymentAmountCents)
   const paymentThemeVars = {
     '--bs-body-bg': '#f8f9fa',
     '--bs-body-color': '#212529',
@@ -130,8 +133,42 @@ function PaymentsPage() {
   }, [amountLabel])
 
   useEffect(() => {
-    setDonationAmountInput(formatAmountInput(defaultDonationCents))
-  }, [defaultDonationCents])
+    let cancelled = false
+
+    loadCurrentUser()
+      .then((status) => {
+        if (cancelled) return
+        setCurrentUser(status?.authenticated && status?.user ? status.user : null)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCurrentUser(null)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCurrentUserLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    setPaymentAmountInput(formatAmountInput(defaultPaymentCents))
+  }, [defaultPaymentCents])
+
+  useEffect(() => {
+    if (!currentUser) return
+
+    setForm((current) => ({
+      ...current,
+      name: current.name || currentUser.name || '',
+      email: current.email || currentUser.email || '',
+      phone: current.phone || currentUser.phone || '',
+    }))
+  }, [currentUser])
 
   useEffect(() => {
     let cancelled = false
@@ -140,6 +177,7 @@ function PaymentsPage() {
       if (!secureToken) {
         setPaymentLink(null)
         setPaymentLinkError('')
+        setPaymentOutcome(null)
         setPaymentLinkLoading(false)
         return
       }
@@ -155,10 +193,11 @@ function PaymentsPage() {
         const link = result.paymentLink || null
         console.log('[PaymentsPage] Payment link resolved:', link)
         setPaymentLink(link)
+        setPaymentOutcome(null)
         setForm({
-          name: link?.name || '',
-          email: link?.email || '',
-          phone: link?.phone || '',
+          name: link?.name || currentUser?.name || '',
+          email: link?.email || currentUser?.email || '',
+          phone: link?.phone || currentUser?.phone || '',
           postalCode: '',
         })
       } catch (error) {
@@ -178,25 +217,25 @@ function PaymentsPage() {
     return () => {
       cancelled = true
     }
-  }, [secureToken])
+  }, [secureToken, currentUser])
 
   const handleChange = (event) => {
     const { name, value } = event.target
     setForm((current) => ({ ...current, [name]: value }))
   }
 
-  const handleDonationAmountChange = (event) => {
-    setDonationAmountInput(event.target.value)
+  const handlePaymentAmountChange = (event) => {
+    setPaymentAmountInput(event.target.value)
   }
 
-  const handleDonationAmountBlur = () => {
-    const cents = parseAmountInput(donationAmountInput)
-    const normalizedCents = cents && cents >= minimumDonationCents ? cents : minimumDonationCents
-    setDonationAmountInput(formatAmountInput(normalizedCents))
+  const handlePaymentAmountBlur = () => {
+    const cents = parseAmountInput(paymentAmountInput)
+    const normalizedCents = cents && cents >= minimumPaymentCents ? cents : minimumPaymentCents
+    setPaymentAmountInput(formatAmountInput(normalizedCents))
   }
 
-  const handleResetDonationAmount = () => {
-    setDonationAmountInput(formatAmountInput(defaultDonationCents))
+  const handleResetPaymentAmount = () => {
+    setPaymentAmountInput(formatAmountInput(defaultPaymentCents))
   }
 
   const handleSubmit = async (event) => {
@@ -207,12 +246,10 @@ function PaymentsPage() {
       return
     }
 
-    const amountCents = parseAmountInput(donationAmountInput) || donationAmountCents
+    const amountCents = parseAmountInput(paymentAmountInput) || paymentAmountCents
 
-    if (amountCents < minimumDonationCents) {
-      setMessage(
-        `The donation amount cannot be less than ${formatMoney(minimumDonationCents)}.`,
-      )
+    if (amountCents < minimumPaymentCents) {
+      setMessage(`The payment amount cannot be less than ${formatMoney(minimumPaymentCents)}.`)
       return
     }
 
@@ -263,9 +300,22 @@ function PaymentsPage() {
         return
       }
 
-      setMessage(`Payment ${String(paymentResult.payment.status || 'completed').toLowerCase()} for ${formatMoney(amountCents)}.`)
+      const confirmationEmailSent = Boolean(paymentResult.confirmationEmailSent)
+      const nextSteps = Array.isArray(paymentResult.nextSteps) ? paymentResult.nextSteps : []
+      setPaymentOutcome({
+        amountLabel: formatMoney(amountCents),
+        confirmationEmailSent,
+        nextSteps,
+        serviceStatus: paymentResult.serviceStatus || 'received',
+        orderCode: paymentResult.orderCode || '',
+      })
+      setMessage(
+        confirmationEmailSent
+          ? `Payment ${String(paymentResult.payment.status || 'completed').toLowerCase()} for ${formatMoney(amountCents)}. Confirmation email sent.`
+          : `Payment ${String(paymentResult.payment.status || 'completed').toLowerCase()} for ${formatMoney(amountCents)}.`,
+      )
       setForm({ name: '', email: '', phone: '', postalCode: '' })
-      setDonationAmountInput(formatAmountInput(defaultDonationCents))
+      setPaymentAmountInput(formatAmountInput(defaultPaymentCents))
       if (cardRef.current?.clear) {
         await cardRef.current.clear()
       }
@@ -344,8 +394,8 @@ function PaymentsPage() {
 
   return (
     <main
-      className="payments-checkout min-vh-100 bg-light text-body"
-      data-bs-theme="light"
+      className="payments-checkout min-vh-100"
+      data-bs-theme="dark"
       style={paymentThemeVars}
     >
       <section className="py-4 py-lg-5">
@@ -360,7 +410,7 @@ function PaymentsPage() {
                 </span>
               </NavLink>
               <h1 className="h3 fw-semibold mb-2 mt-3">Payments</h1>
-              <p className="mb-0 text-muted">Donations are made to Gourishankar Mandir Inc.</p>
+              <p className="mb-0 text-muted">Payments are made to Gourishankar Mandir Inc.</p>
             </div>
             <button
               type="button"
@@ -376,10 +426,55 @@ function PaymentsPage() {
       <section className="pb-5">
         <div className="container-xxl">
           {paymentLinkLoading ? <div className="alert alert-secondary mb-4">Loading payment link...</div> : null}
+          {currentUserLoading && !currentUser ? <div className="alert alert-secondary mb-4">Loading account details...</div> : null}
           {paymentLinkError ? <div className="alert alert-danger mb-4">{paymentLinkError}</div> : null}
+          {paymentOutcome ? (
+            <div className="surface surface-pad mb-4">
+              <p className="section-kicker mb-2">Confirmation</p>
+              <h2 className="h4 mb-3">Your payment was received.</h2>
+              <p className="section-intro mb-3">
+                {paymentOutcome.confirmationEmailSent
+                  ? 'A confirmation email has been sent with the next steps.'
+                  : 'The payment is recorded. A confirmation email could not be sent automatically, so the next steps are shown here.'}
+              </p>
+              <div className="row g-3">
+                <div className="col-lg-4">
+                  <div className="surface surface-soft surface-pad h-100">
+                    <div className="section-kicker mb-2">Payment</div>
+                    <div className="h4 mb-0">{paymentOutcome.amountLabel}</div>
+                    {paymentOutcome.orderCode ? (
+                      <div className="small text-secondary mt-2">Order code: {paymentOutcome.orderCode}</div>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="col-lg-8">
+                  <div className="surface surface-soft surface-pad h-100">
+                    <div className="section-kicker mb-2">What happens next</div>
+                    <ol className="mb-0 ps-3">
+                      {(paymentOutcome.nextSteps || []).map((step) => (
+                        <li key={step} className="mb-2 text-secondary">
+                          {step}
+                        </li>
+                      ))}
+                    </ol>
+                    {paymentOutcome.orderCode ? (
+                      <div className="mt-3">
+                        <NavLink
+                          to={`/track-order?code=${encodeURIComponent(paymentOutcome.orderCode)}`}
+                          className="text-decoration-none"
+                        >
+                          Track this order
+                        </NavLink>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="row g-4">
             <aside className="col-lg-4">
-              <div className="card bg-white shadow-sm border h-100">
+              <div className="card bg-white shadow-sm border h-100 payment-summary-card">
                 <div className="card-body">
                   <p className="text-uppercase text-muted small fw-semibold mb-2">Receipt</p>
                   <h2 className="h5 mb-3">{selection.serviceName}</h2>
@@ -390,24 +485,24 @@ function PaymentsPage() {
                         <span className="text-muted small">Edit the amount if you want to donate more.</span>
                       </div>
                       <div className="flex-shrink-0 text-end">
-                        <div className="input-group input-group-sm" style={{ width: '7rem' }}>
-                          <span className="input-group-text">$</span>
-                          <input
-                            type="text"
+                      <div className="input-group input-group-sm payment-amount-shell">
+                        <span className="input-group-text">$</span>
+                        <input
+                          type="text"
                             inputMode="decimal"
                             className="form-control text-end"
-                            value={donationAmountInput}
-                            onChange={handleDonationAmountChange}
-                            onBlur={handleDonationAmountBlur}
-                            min={formatAmountInput(minimumDonationCents)}
+                            value={paymentAmountInput}
+                            onChange={handlePaymentAmountChange}
+                            onBlur={handlePaymentAmountBlur}
+                            min={formatAmountInput(minimumPaymentCents)}
                             step="0.01"
-                            placeholder={formatAmountInput(defaultDonationCents)}
-                          />
-                        </div>
+                          placeholder={formatAmountInput(defaultPaymentCents)}
+                        />
+                      </div>
                         <button
                           type="button"
                           className="btn btn-link btn-sm p-0 mt-1 text-decoration-none"
-                          onClick={handleResetDonationAmount}
+                          onClick={handleResetPaymentAmount}
                         >
                           Reset
                         </button>
@@ -415,7 +510,7 @@ function PaymentsPage() {
                     </div>
                     <div className="list-group-item px-0 py-3 d-flex justify-content-between align-items-center">
                       <span className="fw-semibold">Total</span>
-                      <strong>{donationAmountLabel}</strong>
+                      <strong>{paymentAmountLabel}</strong>
                     </div>
                   </div>
                 </div>
@@ -428,8 +523,18 @@ function PaymentsPage() {
                   <div className="mb-4">
                     <p className="text-uppercase text-muted small fw-semibold mb-2">Payment details</p>
                     <h3 className="h5 mb-0">Enter card information</h3>
+                    <p className="small text-muted mb-0 mt-2">
+                      {currentUser
+                        ? `Signed in as ${currentUser.name || currentUser.email || 'your account'}. Name, email, and phone are prefilled.`
+                        : 'We use the order link to set the service and amount, then you can enter payment details below.'}
+                    </p>
                   </div>
-                  <form className="row g-3" onSubmit={handleSubmit}>
+                  {currentUser ? (
+                    <div className="alert alert-info py-2 small mb-3">
+                      Account details are already filled in. You can edit them here if needed.
+                    </div>
+                  ) : null}
+                  <form className="row g-3 payment-form-grid" onSubmit={handleSubmit}>
                     <div className="col-md-6">
                       <label className="form-label fw-semibold">Name</label>
                       <input
@@ -438,6 +543,7 @@ function PaymentsPage() {
                         value={form.name}
                         onChange={handleChange}
                         placeholder="Your name"
+                        autoComplete="name"
                       />
                     </div>
                     <div className="col-md-6">
@@ -449,6 +555,7 @@ function PaymentsPage() {
                         value={form.email}
                         onChange={handleChange}
                         placeholder="you@example.com"
+                        autoComplete="email"
                       />
                     </div>
                     <div className="col-md-6">
@@ -460,6 +567,7 @@ function PaymentsPage() {
                         value={form.phone}
                         onChange={handleChange}
                         placeholder="+1 555 123 4567"
+                        autoComplete="tel"
                       />
                     </div>
                     <div className="col-md-6">
@@ -497,13 +605,13 @@ function PaymentsPage() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="col-12 d-flex flex-wrap gap-3 align-items-center">
+                    <div className="col-12 d-flex flex-wrap gap-3 align-items-center payment-actions">
                       <button
                         type="submit"
                         className="btn btn-primary rounded-pill px-4"
-                        disabled={!cardReady || isSubmitting || !donationAmountCents}
+                        disabled={!cardReady || isSubmitting || !paymentAmountCents}
                       >
-                        {isSubmitting ? 'Processing...' : 'Donate'}
+                        {isSubmitting ? 'Processing...' : 'Pay'}
                       </button>
                       <button
                         type="button"

@@ -38,20 +38,79 @@ const ROUTE_SEO = {
     description:
       'Send a message, subscribe for temple letters, or ask for blessings and arrangements.',
   },
+  '/account': {
+    title: `Account Dashboard | ${SITE_NAME}`,
+    description:
+      'View service orders, payment history, and completion updates in your account dashboard.',
+    robots: 'noindex, nofollow',
+  },
+  '/login': {
+    title: `Log In | ${SITE_NAME}`,
+    description:
+      'Sign in to view your service history, receipts, and completion updates.',
+    robots: 'noindex, nofollow',
+  },
+  '/sign-up': {
+    title: `Sign Up | ${SITE_NAME}`,
+    description:
+      'Create an account to connect your service orders and payment history.',
+    robots: 'noindex, nofollow',
+  },
+  '/register': {
+    title: `Sign Up | ${SITE_NAME}`,
+    description:
+      'Create an account to connect your service orders and payment history.',
+    robots: 'noindex, nofollow',
+  },
+  '/account/reset-password': {
+    title: `Reset Password | ${SITE_NAME}`,
+    description:
+      'Create a new password for your Gourishankar Mandir account.',
+    robots: 'noindex, nofollow',
+  },
+  '/account/verify-email': {
+    title: `Verify Email | ${SITE_NAME}`,
+    description:
+      'Verify your email address to activate account messaging and order tracking.',
+    robots: 'noindex, nofollow',
+  },
+  '/track-order': {
+    title: `Track Order | ${SITE_NAME}`,
+    description:
+      'Look up your service order using the order code from your confirmation email.',
+    robots: 'noindex, nofollow',
+  },
+  '/order/:orderCode': {
+    title: `Order Details | ${SITE_NAME}`,
+    description:
+      'Review the timeline, payment, and completion details for a service order.',
+    robots: 'noindex, nofollow',
+  },
+  '/orders/:orderCode': {
+    title: `Order Details | ${SITE_NAME}`,
+    description:
+      'Review the timeline, payment, and completion details for a service order.',
+    robots: 'noindex, nofollow',
+  },
   '/payments': {
     title: `Payments | ${SITE_NAME}`,
     description:
-      'Complete a secure donation for a selected service or contribution.',
+      'Complete a secure payment for a selected service or contribution.',
+    robots: 'noindex, nofollow',
+  },
+  '/admin': {
+    title: `Admin Login | ${SITE_NAME}`,
+    description: 'Open the private access page for temple administration tools.',
     robots: 'noindex, nofollow',
   },
   '/priest-review': {
-    title: `Priest Access | ${SITE_NAME}`,
-    description: 'Generate or enter the priest access code before opening the private tools page.',
+    title: `Admin Access | ${SITE_NAME}`,
+    description: 'Sign in with a manually provisioned admin account before opening the private tools page.',
     robots: 'noindex, nofollow',
   },
   '/priest-tools': {
-    title: `Priest Tools | ${SITE_NAME}`,
-    description: 'Review requests and open payment request or custom payment pages after unlocking priest access.',
+    title: `Dashboard | ${SITE_NAME}`,
+    description: 'Review requests and open payment request or custom payment pages after admin sign in.',
     robots: 'noindex, nofollow',
   },
   '/priest-payment-request': {
@@ -64,6 +123,12 @@ const ROUTE_SEO = {
     description: 'Generate and send a payment page to a custom customer without a request record.',
     robots: 'noindex, nofollow',
   },
+}
+
+function resolveSeoKey(pathname) {
+  if (pathname.startsWith('/order/')) return '/order/:orderCode'
+  if (pathname.startsWith('/orders/')) return '/orders/:orderCode'
+  return pathname
 }
 
 function getSiteOrigin() {
@@ -101,7 +166,7 @@ function ensureCanonical(href) {
 }
 
 export function applySeoForPath(pathname, search = '') {
-  const route = ROUTE_SEO[pathname] || ROUTE_SEO['/']
+  const route = ROUTE_SEO[resolveSeoKey(pathname)] || ROUTE_SEO['/']
   const origin = getSiteOrigin()
   const canonical = new URL(`${pathname}${search}`, origin).toString()
 
