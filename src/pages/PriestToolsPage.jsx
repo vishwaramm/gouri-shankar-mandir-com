@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import { CommunityEventsPanel } from '../components/CommunityEventsPanel.jsx'
 import { ProfileAvatar } from '../components/ProfileAvatar.jsx'
 import {
+  createCommunityEvent,
+  deleteCommunityEvent,
   loadPriestAuthStatus,
   loadSiteData,
+  deleteContactMessage,
+  markContactMessageRead,
+  replyContactMessage,
   markServiceRequestCompleted,
   processServiceCancellation,
   processServiceRefund,
@@ -12,7 +18,9 @@ import {
 } from '../lib/siteApi.js'
 import {
   AdminAccessRequestsPanel,
+  ContactMessagesPanel,
   OrderEventLogPanel,
+  TempleLettersPanel,
   SquareSyncPanel,
   ServiceRequestCard,
   SupportRequestCard,
@@ -37,6 +45,9 @@ function PriestToolsPage() {
   const [recentEvents, setRecentEvents] = useState([])
   const [adminAccessRequests, setAdminAccessRequests] = useState([])
   const [adminUsers, setAdminUsers] = useState([])
+  const [newsletters, setNewsletters] = useState([])
+  const [communityEvents, setCommunityEvents] = useState([])
+  const [contactMessages, setContactMessages] = useState([])
   const [adminPermissions, setAdminPermissions] = useState({
     role: 'staff',
     isSuperAdmin: false,
@@ -60,6 +71,15 @@ function PriestToolsPage() {
   const [adminProfileDrafts, setAdminProfileDrafts] = useState({})
   const [adminProfileBusyById, setAdminProfileBusyById] = useState({})
   const [adminProfileStatusById, setAdminProfileStatusById] = useState({})
+  const [contactReplyDrafts, setContactReplyDrafts] = useState({})
+  const [contactReplyBusyById, setContactReplyBusyById] = useState({})
+  const [contactReplyStatusById, setContactReplyStatusById] = useState({})
+  const [contactDeleteBusyById, setContactDeleteBusyById] = useState({})
+  const [contactDeleteStatusById, setContactDeleteStatusById] = useState({})
+  const [contactReadBusyById, setContactReadBusyById] = useState({})
+  const [contactReadStatusById, setContactReadStatusById] = useState({})
+  const [communityEventBusyById, setCommunityEventBusyById] = useState({})
+  const [communityEventStatusById, setCommunityEventStatusById] = useState({})
 
   const sortedRequests = useMemo(() => {
     return [...requests].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
@@ -73,6 +93,8 @@ function PriestToolsPage() {
   const refundCount = sortedRequests.filter((item) => item.refundedAt).length
   const cancelledCount = sortedRequests.filter((item) => item.cancelledAt).length
   const supportCount = supportRequests.length
+  const newsletterCount = newsletters.length
+  const communityEventCount = communityEvents.length
 
   const getSupportLabel = (request) => {
     if (request.serviceStatus === 'refund_requested') return 'Refund requested'
@@ -98,6 +120,9 @@ function PriestToolsPage() {
       const data = await loadSiteData()
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
+      setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
@@ -303,6 +328,9 @@ function PriestToolsPage() {
       const data = await loadSiteData()
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
+      setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
@@ -352,6 +380,9 @@ function PriestToolsPage() {
       const data = await loadSiteData()
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
+      setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
@@ -431,6 +462,203 @@ function PriestToolsPage() {
   }
 
   const isSuperAdmin = Boolean(adminPermissions.canAssignAdminTitles)
+  const currentOfficerId = adminUser?.officerId || ''
+  const visibleContactMessages = useMemo(() => {
+    if (!contactMessages.length) return []
+    return [...contactMessages]
+      .filter((message) => {
+        const hiddenIds = Array.isArray(message.hiddenForOfficerIds) ? message.hiddenForOfficerIds : []
+        if (currentOfficerId && hiddenIds.includes(currentOfficerId)) return false
+        if (isSuperAdmin) return true
+        const recipientIds = Array.isArray(message.recipientOfficerIds) ? message.recipientOfficerIds : []
+        return currentOfficerId ? recipientIds.includes(currentOfficerId) : false
+      })
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+  }, [contactMessages, currentOfficerId, isSuperAdmin])
+  const contactCount = visibleContactMessages.length
+
+  const handleContactReplyDraftChange = (messageId, value) => {
+    setContactReplyDrafts((current) => ({
+      ...current,
+      [messageId]: value,
+    }))
+  }
+
+  const handleReplyContactMessage = async (message) => {
+    if (!message?.id) return
+    const replyMessage = (contactReplyDrafts[message.id] || '').trim()
+    if (!replyMessage) {
+      setContactReplyStatusById((current) => ({
+        ...current,
+        [message.id]: 'Write a reply first.',
+      }))
+      return
+    }
+
+    setContactReplyBusyById((current) => ({ ...current, [message.id]: true }))
+    setContactReplyStatusById((current) => ({ ...current, [message.id]: 'Sending reply...' }))
+
+    try {
+      const result = await replyContactMessage({
+        messageId: message.id,
+        replyMessage,
+      })
+
+      const updatedEntry = result.entry || null
+      if (updatedEntry) {
+        setContactMessages((current) =>
+          current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)),
+        )
+      }
+
+      setContactReplyDrafts((current) => ({
+        ...current,
+        [message.id]: '',
+      }))
+      setContactReplyStatusById((current) => ({
+        ...current,
+        [message.id]: result.emailed
+          ? 'Reply sent.'
+          : result.mailStatus === 'missing_smtp'
+            ? 'Reply saved, but email delivery is not configured.'
+            : result.mailError
+              ? `Reply saved, but email delivery failed: ${result.mailError}`
+              : 'Reply saved, but email delivery failed.',
+      }))
+    } catch (replyError) {
+      setContactReplyStatusById((current) => ({
+        ...current,
+        [message.id]: replyError?.message || 'Unable to send reply.',
+      }))
+    } finally {
+      setContactReplyBusyById((current) => ({ ...current, [message.id]: false }))
+    }
+  }
+
+  const handleDeleteContactMessage = async (message) => {
+    if (!message?.id) return
+
+    setContactDeleteBusyById((current) => ({ ...current, [message.id]: true }))
+    setContactDeleteStatusById((current) => ({ ...current, [message.id]: 'Removing from your inbox...' }))
+
+    try {
+      const result = await deleteContactMessage({
+        messageId: message.id,
+      })
+
+      const updatedEntry = result.entry || null
+      if (updatedEntry) {
+        setContactMessages((current) =>
+          current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)),
+        )
+      }
+
+      setContactDeleteStatusById((current) => ({
+        ...current,
+        [message.id]: result.message || 'Removed from your inbox.',
+      }))
+    } catch (deleteError) {
+      setContactDeleteStatusById((current) => ({
+        ...current,
+        [message.id]: deleteError?.message || 'Unable to remove message.',
+      }))
+    } finally {
+      setContactDeleteBusyById((current) => ({ ...current, [message.id]: false }))
+    }
+  }
+
+  const handleMarkContactMessageRead = async (message) => {
+    if (!message?.id) return
+
+    setContactReadBusyById((current) => ({ ...current, [message.id]: true }))
+    setContactReadStatusById((current) => ({ ...current, [message.id]: 'Marking as read...' }))
+
+    try {
+      const result = await markContactMessageRead({
+        messageId: message.id,
+      })
+
+      const updatedEntry = result.entry || null
+      if (updatedEntry) {
+        setContactMessages((current) =>
+          current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)),
+        )
+      }
+
+      setContactReadStatusById((current) => ({
+        ...current,
+        [message.id]: result.message || 'Marked as read.',
+      }))
+    } catch (readError) {
+      setContactReadStatusById((current) => ({
+        ...current,
+        [message.id]: readError?.message || 'Unable to mark as read.',
+      }))
+    } finally {
+      setContactReadBusyById((current) => ({ ...current, [message.id]: false }))
+    }
+  }
+
+  const handleSaveCommunityEvent = async (payload) => {
+    if (!payload?.title || !payload?.detail) {
+      throw new Error('Title and details are required.')
+    }
+
+    const busyKey = payload.eventId || `new-${Date.now()}`
+    setCommunityEventBusyById((current) => ({ ...current, [busyKey]: true }))
+    setCommunityEventStatusById((current) => ({ ...current, [busyKey]: '' }))
+
+    try {
+      const result = await createCommunityEvent(payload)
+      const saved = result.communityEvent || null
+      if (saved?.id) {
+        setCommunityEvents((current) => {
+          const filtered = current.filter((item) => item.id !== saved.id)
+          filtered.unshift(saved)
+          return filtered
+        })
+      }
+
+      setCommunityEventStatusById((current) => ({
+        ...current,
+        [saved?.id || busyKey]: result.message || 'Community event saved.',
+      }))
+      await refreshRequests()
+      return result
+    } catch (eventError) {
+      setCommunityEventStatusById((current) => ({
+        ...current,
+        [busyKey]: eventError?.message || 'Unable to save community event.',
+      }))
+      throw eventError
+    } finally {
+      setCommunityEventBusyById((current) => ({ ...current, [busyKey]: false }))
+    }
+  }
+
+  const handleDeleteCommunityEvent = async (event) => {
+    if (!event?.id) return
+
+    setCommunityEventBusyById((current) => ({ ...current, [event.id]: true }))
+    setCommunityEventStatusById((current) => ({ ...current, [event.id]: 'Deleting...' }))
+
+    try {
+      const result = await deleteCommunityEvent(event.id)
+      setCommunityEvents((current) => current.filter((item) => item.id !== event.id))
+      setCommunityEventStatusById((current) => ({
+        ...current,
+        [event.id]: result.message || 'Community event deleted.',
+      }))
+      await refreshRequests()
+    } catch (eventError) {
+      setCommunityEventStatusById((current) => ({
+        ...current,
+        [event.id]: eventError?.message || 'Unable to delete community event.',
+      }))
+    } finally {
+      setCommunityEventBusyById((current) => ({ ...current, [event.id]: false }))
+    }
+  }
 
   return (
     <main className="priest-tools-page min-vh-100" data-bs-theme="dark">
@@ -553,6 +781,33 @@ function PriestToolsPage() {
                 </div>
               ) : null}
 
+              <ContactMessagesPanel
+                messages={visibleContactMessages}
+                currentOfficerId={currentOfficerId}
+                replyDrafts={contactReplyDrafts}
+                replyBusyById={contactReplyBusyById}
+                replyStatusById={contactReplyStatusById}
+                deleteBusyById={contactDeleteBusyById}
+                deleteStatusById={contactDeleteStatusById}
+                readBusyById={contactReadBusyById}
+                readStatusById={contactReadStatusById}
+                onReplyDraftChange={handleContactReplyDraftChange}
+                onMarkRead={handleMarkContactMessageRead}
+                onReply={handleReplyContactMessage}
+                onDelete={handleDeleteContactMessage}
+              />
+
+              <TempleLettersPanel subscribers={newsletters} />
+
+              <CommunityEventsPanel
+                events={communityEvents}
+                saveStatusById={communityEventStatusById}
+                deleteBusyById={communityEventBusyById}
+                deleteStatusById={communityEventStatusById}
+                onSave={handleSaveCommunityEvent}
+                onDelete={handleDeleteCommunityEvent}
+              />
+
               <div className="row g-3 mt-4">
                 <div className="col-sm-4">
                   <div className="surface surface-soft surface-pad h-100">
@@ -588,6 +843,24 @@ function PriestToolsPage() {
                   <div className="surface surface-soft surface-pad h-100">
                     <div className="section-kicker mb-2">Support</div>
                     <div className="h4 mb-0">{supportCount}</div>
+                  </div>
+                </div>
+                <div className="col-sm-4">
+                  <div className="surface surface-soft surface-pad h-100">
+                    <div className="section-kicker mb-2">Messages</div>
+                    <div className="h4 mb-0">{contactCount}</div>
+                  </div>
+                </div>
+                <div className="col-sm-4">
+                  <div className="surface surface-soft surface-pad h-100">
+                    <div className="section-kicker mb-2">Letters</div>
+                    <div className="h4 mb-0">{newsletterCount}</div>
+                  </div>
+                </div>
+                <div className="col-sm-4">
+                  <div className="surface surface-soft surface-pad h-100">
+                    <div className="section-kicker mb-2">Community</div>
+                    <div className="h4 mb-0">{communityEventCount}</div>
                   </div>
                 </div>
                 <div className="col-sm-4">

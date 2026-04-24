@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { navItems } from '../content.js'
+import { legalLinks, navItems } from '../content.js'
 import { applySeoForPath } from '../lib/seo.js'
 import { loadCurrentUser, loadPriestAuthStatus, logoutPriestAuth, logoutUser } from '../lib/siteApi.js'
 
@@ -23,6 +23,16 @@ function SiteLayout() {
   const location = useLocation()
   const year = new Date().getFullYear()
   const onAdminRoute = location.pathname === '/priest-review' || location.pathname.startsWith('/priest-')
+  const getNavLinkClass = (path, isActive) => {
+    const featuredClass =
+      path === '/services'
+        ? 'site-link--services'
+        : path === '/blog'
+          ? 'site-link--blog'
+          : ''
+
+    return `site-link ${featuredClass} ${isActive ? 'is-active' : ''}`.trim()
+  }
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -75,7 +85,15 @@ function SiteLayout() {
   }, [location.pathname, location.search])
 
   useEffect(() => {
-    const handleUserUpdate = () => {
+    const handleUserUpdate = (event) => {
+      if (event?.detail && typeof event.detail === 'object' && 'authenticated' in event.detail) {
+        setAccountState({
+          loading: false,
+          user: event.detail.authenticated && event.detail.user ? event.detail.user : null,
+        })
+        return
+      }
+
       loadCurrentUser()
         .then((status) => {
           setAccountState({
@@ -93,7 +111,15 @@ function SiteLayout() {
   }, [])
 
   useEffect(() => {
-    const handleAdminUpdate = () => {
+    const handleAdminUpdate = (event) => {
+      if (event?.detail && typeof event.detail === 'object' && 'authenticated' in event.detail) {
+        setAdminState({
+          loading: false,
+          authenticated: Boolean(event.detail.authenticated),
+        })
+        return
+      }
+
       loadPriestAuthStatus()
         .then((status) => {
           setAdminState({
@@ -129,7 +155,7 @@ function SiteLayout() {
     await logoutUser()
     setAccountState({ loading: false, user: null })
     setAccountMenuOpen(false)
-    window.dispatchEvent(new Event('mandir-user-updated'))
+    window.dispatchEvent(new CustomEvent('mandir-user-updated', { detail: { authenticated: false, user: null } }))
   }
 
   const handleAdminLogout = async () => {
@@ -138,7 +164,7 @@ function SiteLayout() {
     } finally {
       setAdminState((current) => ({ ...current, authenticated: false }))
       setAdminMenuOpen(false)
-      window.dispatchEvent(new Event('mandir-admin-updated'))
+      window.dispatchEvent(new CustomEvent('mandir-admin-updated', { detail: { authenticated: false } }))
     }
   }
 
@@ -174,7 +200,7 @@ function SiteLayout() {
                   key={item.path}
                   to={item.path}
                   onClick={() => setMobileNavOpen(false)}
-                  className={({ isActive }) => `site-link ${isActive ? 'is-active' : ''}`}
+                  className={({ isActive }) => getNavLinkClass(item.path, isActive)}
                 >
                   {item.label}
                 </NavLink>
@@ -348,7 +374,7 @@ function SiteLayout() {
               </ul>
             </div>
 
-            <div className="col-md-6 col-lg-3">
+            <div className="col-md-6 col-lg-2">
               <p className="section-kicker mb-3">Visit</p>
               <div className="d-flex flex-column gap-2">
                 {navItems.slice(1).map((item) => (
@@ -362,7 +388,21 @@ function SiteLayout() {
               </div>
             </div>
 
-            <div className="col-md-6 col-lg-3">
+            <div className="col-md-6 col-lg-2">
+              <p className="section-kicker mb-3">Legal</p>
+              <div className="d-flex flex-column gap-2">
+                {legalLinks.map((item) => (
+                  <NavLink key={item.path} className="journey-link" to={item.path}>
+                    <div>
+                      <h3>{item.label}</h3>
+                    </div>
+                    <span className="journey-arrow">↗</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+
+            <div className="col-md-6 col-lg-2">
               <p className="section-kicker mb-3">Admin</p>
               <div className="surface surface-soft surface-pad h-100">
                 <h3 className="h5 mb-3">Admin login</h3>

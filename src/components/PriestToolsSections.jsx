@@ -130,6 +130,186 @@ export function AdminAccessRequestsPanel({ requests = [] }) {
   )
 }
 
+export function TempleLettersPanel({ subscribers = [] }) {
+  const sortedSubscribers = [...subscribers].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Temple letters</div>
+          <div className="h5 mb-1">Newsletter subscribers</div>
+          <p className="mb-0 text-secondary">People who signed up for temple letters and announcements.</p>
+        </div>
+        <span className="badge text-bg-light border text-dark">{sortedSubscribers.length} subscribers</span>
+      </div>
+
+      <div className="timeline-list mt-3">
+        {sortedSubscribers.length ? (
+          sortedSubscribers.map((subscriber) => (
+            <article className="timeline-item" key={subscriber.email}>
+              <time>{formatDateTime(subscriber.createdAt)}</time>
+              <div>
+                <h4 className="h5 mb-1">{subscriber.email}</h4>
+                <p className="mb-0 text-secondary">Subscribed for temple letters.</p>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="surface surface-soft surface-pad">No temple letters subscribers yet.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function ContactMessagesPanel({
+  messages = [],
+  currentOfficerId = '',
+  replyDrafts = {},
+  replyBusyById = {},
+  replyStatusById = {},
+  deleteBusyById = {},
+  deleteStatusById = {},
+  readBusyById = {},
+  readStatusById = {},
+  onReplyDraftChange,
+  onMarkRead,
+  onReply,
+  onDelete,
+}) {
+  const unreadCount = messages.filter((message) => {
+    const readIds = Array.isArray(message.readByOfficerIds) ? message.readByOfficerIds : []
+    return currentOfficerId ? !readIds.includes(currentOfficerId) : false
+  }).length
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Inbox</div>
+          <div className="h5 mb-1">Contact messages</div>
+          <p className="mb-0 text-secondary">
+            Messages sent from the site arrive here for the officers who were selected or for all officers in the temple.
+          </p>
+        </div>
+        <div className="d-flex flex-wrap gap-2 align-items-center">
+          <span className="badge text-bg-light border text-dark">{messages.length} messages</span>
+          <span className="badge text-bg-warning text-dark">{unreadCount} unread</span>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        {messages.length ? (
+          messages.map((message) => {
+            const recipientNames = Array.isArray(message.recipientOfficerNames) && message.recipientOfficerNames.length
+              ? message.recipientOfficerNames.join(', ')
+              : 'All officers'
+            const replyDraft = replyDrafts[message.id] || ''
+            const readIds = Array.isArray(message.readByOfficerIds) ? message.readByOfficerIds : []
+            const isUnread = currentOfficerId ? !readIds.includes(currentOfficerId) : false
+
+            return (
+              <div className="col-12" key={message.id}>
+                <article className="surface surface-soft surface-pad">
+                  <div className="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                    <div>
+                      <p className="section-kicker mb-2">{message.subject || 'General message'}</p>
+                      <h3 className="h5 mb-1">{message.name || 'Visitor'}</h3>
+                      <p className="mb-0 text-secondary">
+                        {message.email}
+                        {message.phone ? ` · ${message.phone}` : ''}
+                      </p>
+                    </div>
+                    <div className="text-end">
+                      <span className="badge text-bg-light border text-dark">To: {recipientNames}</span>
+                      <div className="mt-2 d-flex flex-column align-items-end gap-2">
+                        <span className={`badge ${isUnread ? 'text-bg-warning text-dark' : 'text-bg-success'}`}>
+                          {isUnread ? 'Unread' : 'Read'}
+                        </span>
+                        {message.repliedAt ? <div className="small text-success-emphasis">Replied</div> : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="surface surface-soft surface-pad mt-3">
+                    <div className="small text-secondary">Message</div>
+                    <div className="mt-1" style={{ whiteSpace: 'pre-wrap' }}>
+                      {message.message || 'No message provided.'}
+                    </div>
+                    <div className="small text-secondary mt-3">Received</div>
+                    <div>{formatDateTime(message.createdAt)}</div>
+                  </div>
+
+                  {message.repliedAt ? (
+                    <div className="surface surface-soft surface-pad mt-3">
+                      <div className="small text-secondary">Reply</div>
+                      <div className="fw-semibold mt-1">{message.replySubject || 'Reply sent'}</div>
+                      <div className="small text-secondary mt-2">Sent</div>
+                      <div>{formatDateTime(message.replyEmailSentAt || message.repliedAt)}</div>
+                      <div className="mt-2" style={{ whiteSpace: 'pre-wrap' }}>
+                        {message.replyMessage || 'No reply text saved.'}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="surface surface-strong surface-pad mt-3">
+                    <label className="form-label fw-semibold text-primary-emphasis">Reply</label>
+                    <textarea
+                      className="form-control"
+                      rows="4"
+                      value={replyDraft}
+                      onChange={(event) => onReplyDraftChange?.(message.id, event.target.value)}
+                      placeholder="Write the reply that should be emailed to the visitor."
+                    />
+                    <div className="d-flex flex-wrap gap-3 align-items-center mt-3">
+                      {isUnread ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline-light rounded-pill px-4"
+                          disabled={Boolean(readBusyById[message.id])}
+                          onClick={() => onMarkRead?.(message)}
+                        >
+                          {readBusyById[message.id] ? 'Marking...' : 'Mark read'}
+                        </button>
+                      ) : (
+                        <span className="small text-success-emphasis">Already read</span>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary rounded-pill px-4"
+                        disabled={Boolean(replyBusyById[message.id])}
+                        onClick={() => onReply?.(message)}
+                      >
+                        {replyBusyById[message.id] ? 'Sending...' : 'Send reply'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-light rounded-pill px-4"
+                        disabled={Boolean(deleteBusyById[message.id])}
+                        onClick={() => onDelete?.(message)}
+                      >
+                        {deleteBusyById[message.id] ? 'Removing...' : 'Delete from my inbox'}
+                      </button>
+                      <div className="small text-secondary">
+                        {readStatusById[message.id] || replyStatusById[message.id] || deleteStatusById[message.id] || ''}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            )
+          })
+        ) : (
+          <div className="col-12">
+            <div className="surface surface-soft surface-pad">No contact messages yet.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function SupportRequestCard({
   request,
   supportLabel,

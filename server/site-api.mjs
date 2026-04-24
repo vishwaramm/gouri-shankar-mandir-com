@@ -72,6 +72,7 @@ const memoryStore = {
   orderEvents: [],
   paymentLinks: [],
   rsvps: [],
+  communityEvents: [],
   contactMessages: [],
   blogPosts: [],
   blogPostLikes: [],
@@ -165,6 +166,7 @@ async function getDb(env) {
 
         await Promise.all([
           db.collection('newsletters').createIndex({ email: 1 }, { unique: true }),
+          db.collection('newsletters').createIndex({ unsubscribeTokenHash: 1 }, { unique: true, sparse: true }),
           db.collection('users').createIndex({ email: 1 }, { unique: true }),
           db.collection('users').createIndex({ createdAt: -1 }),
           db.collection('userSessions').createIndex({ sessionId: 1 }, { unique: true }),
@@ -191,6 +193,10 @@ async function getDb(env) {
           db.collection('paymentLinks').createIndex({ createdAt: -1 }),
           db.collection('paymentLinks').createIndex({ expiresAt: 1 }),
           db.collection('rsvps').createIndex({ createdAt: -1 }),
+          db.collection('communityEvents').createIndex({ createdAt: -1 }),
+          db.collection('communityEvents').createIndex({ eventDate: -1 }),
+          db.collection('communityEvents').createIndex({ section: 1 }),
+          db.collection('communityEvents').createIndex({ kind: 1 }),
           db.collection('contactMessages').createIndex({ createdAt: -1 }),
           db.collection('blogPosts').createIndex({ publishedAt: -1 }),
           db.collection('blogPosts').createIndex({ createdAt: -1 }),
@@ -365,6 +371,10 @@ function getBlogPostLikesCollection(db) {
   return db.collection('blogPostLikes')
 }
 
+function getCommunityEventsCollection(db) {
+  return db.collection('communityEvents')
+}
+
 async function readJsonFile(filePath) {
   try {
     const contents = await readFile(filePath, 'utf8')
@@ -428,6 +438,71 @@ function generateOrderCode() {
 function getBlogAuthorById(authorId) {
   const normalizedId = normalizeOfficerId(authorId)
   return BLOG_AUTHOR_ROSTER.find((author) => author.id === normalizedId) || null
+}
+
+function getContactRecipientOfficerIds(officerIds = [], fallbackToRoster = false) {
+  const roster = BLOG_AUTHOR_ROSTER.map((officer) => officer.id)
+  const normalized = officerIds
+    .map((officerId) => normalizeOfficerId(officerId))
+    .filter((officerId) => roster.includes(officerId))
+
+  if (normalized.length) return [...new Set(normalized)]
+  return fallbackToRoster ? roster : []
+}
+
+async function getContactRecipients(db, officerIds = [], fallbackToRoster = false) {
+  const normalizedOfficerIds = getContactRecipientOfficerIds(officerIds, fallbackToRoster)
+  const recipients = await Promise.all(
+    normalizedOfficerIds.map(async (officerId) => {
+      const officer = getBlogAuthorById(officerId)
+      const adminUser = await getAdminUserByOfficerId(db, officerId)
+      const email = normalizeEmail(adminUser?.email || officer?.email || '')
+
+      if (!email) return null
+
+      return {
+        officerId,
+        email,
+        name: adminUser?.name || officer?.name || '',
+        title: normalizeAdminTitle(adminUser?.title || officer?.role || ''),
+      }
+    }),
+  )
+
+  return recipients.filter(Boolean)
+}
+
+function serializeContactMessage(message) {
+  if (!message) return null
+
+  return {
+    id: message.id || '',
+    name: message.name || '',
+    email: message.email || '',
+    phone: message.phone || '',
+    subject: message.subject || '',
+    message: message.message || '',
+    recipientOfficerIds: Array.isArray(message.recipientOfficerIds)
+      ? message.recipientOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
+      : [],
+    recipientOfficerNames: Array.isArray(message.recipientOfficerNames)
+      ? message.recipientOfficerNames.map((item) => String(item || '')).filter(Boolean)
+      : [],
+    hiddenForOfficerIds: Array.isArray(message.hiddenForOfficerIds)
+      ? message.hiddenForOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
+      : [],
+    readByOfficerIds: Array.isArray(message.readByOfficerIds)
+      ? message.readByOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
+      : [],
+    repliedAt: message.repliedAt || '',
+    repliedByOfficerId: normalizeOfficerId(message.repliedByOfficerId || ''),
+    repliedByOfficerName: message.repliedByOfficerName || '',
+    replySubject: message.replySubject || '',
+    replyMessage: message.replyMessage || '',
+    replyEmailSentAt: message.replyEmailSentAt || '',
+    replyEmailError: message.replyEmailError || '',
+    createdAt: message.createdAt || '',
+  }
 }
 
 function normalizeOfficerId(officerId) {
@@ -564,6 +639,78 @@ function normalizeProfilePhotoUrl(value = '') {
 
 function normalizeAdminTitle(value = '') {
   return String(value || '').trim().slice(0, 80)
+}
+
+function normalizeCommunityEventSection(value = '') {
+  const normalized = String(value || '').trim().toLowerCase()
+  return ['events', 'observances'].includes(normalized) ? normalized : 'events'
+}
+
+function normalizeCommunityEventKind(value = '') {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'ad-hoc' ? 'ad-hoc' : 'recurring'
+}
+
+function normalizeCommunityEventDate(value = '') {
+  const normalized = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return ''
+  const date = new Date(`${normalized}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return ''
+  return normalized
+}
+
+function isExpiredCommunityEvent(entry = {}) {
+  if (normalizeCommunityEventKind(entry.kind) !== 'ad-hoc') return false
+  const eventDate = normalizeCommunityEventDate(entry.eventDate || '')
+  if (!eventDate) return false
+  return new Date(`${eventDate}T23:59:59`).getTime() < Date.now()
+}
+
+function serializeCommunityEvent(entry) {
+  if (!entry) return null
+
+  return {
+    id: entry.id || '',
+    title: entry.title || '',
+    detail: entry.detail || '',
+    section: normalizeCommunityEventSection(entry.section || ''),
+    kind: normalizeCommunityEventKind(entry.kind || ''),
+    scheduleLabel: entry.scheduleLabel || '',
+    eventDate: normalizeCommunityEventDate(entry.eventDate || ''),
+    inPerson: Boolean(entry.inPerson),
+    address: entry.address || '',
+    placeId: entry.placeId || '',
+    latitude: typeof entry.latitude === 'number' ? entry.latitude : null,
+    longitude: typeof entry.longitude === 'number' ? entry.longitude : null,
+    mapsUrl: entry.mapsUrl || '',
+    createdAt: entry.createdAt || '',
+    updatedAt: entry.updatedAt || '',
+  }
+}
+
+async function pruneExpiredCommunityEvents(db) {
+  if (!db) {
+    memoryStore.communityEvents = memoryStore.communityEvents.filter((entry) => !isExpiredCommunityEvent(entry))
+    return
+  }
+
+  await getCommunityEventsCollection(db).deleteMany({
+    kind: 'ad-hoc',
+    eventDate: { $lt: new Date().toISOString().slice(0, 10) },
+  })
+}
+
+async function listCommunityEvents(db, { includeExpired = false } = {}) {
+  if (!db) {
+    const entries = [...memoryStore.communityEvents]
+    return includeExpired ? entries : entries.filter((entry) => !isExpiredCommunityEvent(entry))
+  }
+
+  if (!includeExpired) {
+    await pruneExpiredCommunityEvents(db)
+  }
+
+  return getCommunityEventsCollection(db).find({}).sort({ createdAt: -1 }).toArray()
 }
 
 function isManagedAdminPhotoUrl(value = '') {
@@ -863,6 +1010,74 @@ async function deleteBlogPostById(db, postId) {
   const before = memoryStore.blogPosts.length
   memoryStore.blogPosts = memoryStore.blogPosts.filter((item) => item.id !== normalizedPostId)
   return memoryStore.blogPosts.length !== before
+}
+
+function normalizeCommunityEventPayload(body = {}) {
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  const detail = typeof body.detail === 'string' ? body.detail.trim() : ''
+  const section = normalizeCommunityEventSection(body.section || '')
+  const kind = normalizeCommunityEventKind(body.kind || '')
+  const scheduleLabel = typeof body.scheduleLabel === 'string' ? body.scheduleLabel.trim() : ''
+  const eventDate = normalizeCommunityEventDate(body.eventDate || '')
+  const inPerson = Boolean(body.inPerson)
+  const address = typeof body.address === 'string' ? body.address.trim() : ''
+  const placeId = typeof body.placeId === 'string' ? body.placeId.trim() : ''
+  const mapsUrl = typeof body.mapsUrl === 'string' ? body.mapsUrl.trim() : ''
+  const latitude = Number.isFinite(Number(body.latitude)) ? Number(body.latitude) : null
+  const longitude = Number.isFinite(Number(body.longitude)) ? Number(body.longitude) : null
+
+  return {
+    title,
+    detail,
+    section,
+    kind,
+    scheduleLabel,
+    eventDate,
+    inPerson,
+    address,
+    placeId,
+    mapsUrl,
+    latitude,
+    longitude,
+  }
+}
+
+async function saveCommunityEvent(db, entry) {
+  if (db) {
+    await getCommunityEventsCollection(db).updateOne({ id: entry.id }, { $set: entry }, { upsert: true })
+  } else {
+    const index = memoryStore.communityEvents.findIndex((item) => item.id === entry.id)
+    if (index >= 0) {
+      memoryStore.communityEvents[index] = entry
+    } else {
+      memoryStore.communityEvents.unshift(entry)
+    }
+  }
+}
+
+async function findCommunityEventById(db, eventId) {
+  const normalizedEventId = typeof eventId === 'string' ? eventId.trim() : ''
+  if (!normalizedEventId) return null
+
+  if (db) {
+    return getCommunityEventsCollection(db).findOne({ id: normalizedEventId })
+  }
+
+  return memoryStore.communityEvents.find((item) => item.id === normalizedEventId) || null
+}
+
+async function deleteCommunityEventById(db, eventId) {
+  const normalizedEventId = typeof eventId === 'string' ? eventId.trim() : ''
+  if (!normalizedEventId) return false
+
+  if (db) {
+    const result = await getCommunityEventsCollection(db).deleteOne({ id: normalizedEventId })
+    return Boolean(result.deletedCount)
+  }
+
+  const before = memoryStore.communityEvents.length
+  memoryStore.communityEvents = memoryStore.communityEvents.filter((item) => item.id !== normalizedEventId)
+  return memoryStore.communityEvents.length !== before
 }
 
 async function recordBlogPostLike(db, request, env, postId) {
@@ -2766,11 +2981,12 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const currentAdmin = await getAuthenticatedPriestUser(db, request)
     const adminPermissions = getAdminPermissions(currentAdmin)
 
-    const [newsletters, orders, rsvps, contactMessages, blogPosts, squareWebhookEvents, orderEvents, adminAccessRequests, adminUsers] = usingMongo
+    const [newsletters, orders, rsvps, communityEvents, contactMessages, blogPosts, squareWebhookEvents, orderEvents, adminAccessRequests, adminUsers] = usingMongo
       ? await Promise.all([
           listCollection(db, 'newsletters'),
           listCollection(db, 'orders'),
           listCollection(db, 'rsvps'),
+          listCommunityEvents(db),
           listCollection(db, 'contactMessages'),
           listBlogPosts(db, 20),
           listCollection(db, 'squareWebhookEvents'),
@@ -2782,6 +2998,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
           [...memoryStore.newsletters].slice(0, 20),
           [...memoryStore.orders].slice(0, 20),
           [...memoryStore.rsvps].slice(0, 20),
+          await listCommunityEvents(db),
           [...memoryStore.contactMessages].slice(0, 20),
           await listBlogPosts(db, 20),
           [...memoryStore.squareWebhookEvents].slice(0, 20),
@@ -2802,14 +3019,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         event: item.event,
         createdAt: item.createdAt,
       })),
-      contactMessages: contactMessages.map((item) => ({
-        name: item.name,
-        email: item.email,
-        phone: item.phone || '',
-        subject: item.subject || '',
-        message: item.message,
-        createdAt: item.createdAt,
-      })),
+      communityEvents: communityEvents.map((item) => serializeCommunityEvent(item)),
+      contactMessages: contactMessages.map((item) => serializeContactMessage(item)),
       blogPosts: blogPosts.map((item) => serializeBlogPost(item)),
       orderEvents: orderEvents.map((item) => ({
         ...item,
@@ -2936,6 +3147,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         db.collection('orderEvents').deleteMany({}),
         db.collection('paymentLinks').deleteMany({}),
         db.collection('rsvps').deleteMany({}),
+        db.collection('communityEvents').deleteMany({}),
         db.collection('contactMessages').deleteMany({}),
         db.collection('blogPosts').deleteMany({}),
         db.collection('blogPostLikes').deleteMany({}),
@@ -2951,6 +3163,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       memoryStore.orderEvents = []
       memoryStore.paymentLinks = []
       memoryStore.rsvps = []
+      memoryStore.communityEvents = []
       memoryStore.contactMessages = []
       memoryStore.blogPosts = []
       memoryStore.blogPostLikes = []
@@ -2958,6 +3171,236 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     }
 
     sendJson(response, 200, { ok: true })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/contact-messages/delete') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    const currentOfficerId = normalizeOfficerId(currentAdmin?.officerId || '')
+    if (!currentOfficerId) {
+      sendJson(response, 403, { ok: false, message: 'Officer access required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : ''
+    if (!messageId) {
+      sendJson(response, 400, { ok: false, message: 'Message id is required.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
+    let updatedMessage = null
+
+    if (usingMongo) {
+      const result = await db.collection('contactMessages').findOneAndUpdate(
+        { id: messageId },
+        {
+          $set: { updatedAt: now },
+          $addToSet: { hiddenForOfficerIds: currentOfficerId },
+        },
+        { returnDocument: 'after' },
+      )
+      updatedMessage = result?.value || null
+    } else {
+      const index = memoryStore.contactMessages.findIndex((item) => item.id === messageId)
+      if (index < 0) {
+        sendJson(response, 404, { ok: false, message: 'Message not found.' })
+        return true
+      }
+      const existing = memoryStore.contactMessages[index]
+      const hiddenForOfficerIds = new Set(
+        Array.isArray(existing.hiddenForOfficerIds) ? existing.hiddenForOfficerIds : [],
+      )
+      hiddenForOfficerIds.add(currentOfficerId)
+      updatedMessage = {
+        ...existing,
+        hiddenForOfficerIds: [...hiddenForOfficerIds],
+        updatedAt: now,
+      }
+      memoryStore.contactMessages[index] = updatedMessage
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Message removed from your dashboard.',
+      entry: serializeContactMessage(updatedMessage),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/contact-messages/read') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    const currentOfficerId = normalizeOfficerId(currentAdmin?.officerId || '')
+    if (!currentOfficerId) {
+      sendJson(response, 403, { ok: false, message: 'Officer access required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : ''
+    if (!messageId) {
+      sendJson(response, 400, { ok: false, message: 'Message id is required.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
+    let updatedMessage = null
+
+    if (usingMongo) {
+      const result = await db.collection('contactMessages').findOneAndUpdate(
+        { id: messageId },
+        {
+          $set: { updatedAt: now },
+          $addToSet: { readByOfficerIds: currentOfficerId },
+        },
+        { returnDocument: 'after' },
+      )
+      updatedMessage = result?.value || null
+    } else {
+      const index = memoryStore.contactMessages.findIndex((item) => item.id === messageId)
+      if (index < 0) {
+        sendJson(response, 404, { ok: false, message: 'Message not found.' })
+        return true
+      }
+      const existing = memoryStore.contactMessages[index]
+      const readByOfficerIds = new Set(
+        Array.isArray(existing.readByOfficerIds) ? existing.readByOfficerIds : [],
+      )
+      readByOfficerIds.add(currentOfficerId)
+      updatedMessage = {
+        ...existing,
+        readByOfficerIds: [...readByOfficerIds],
+        updatedAt: now,
+      }
+      memoryStore.contactMessages[index] = updatedMessage
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Message marked as read.',
+      entry: serializeContactMessage(updatedMessage),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/contact-messages/reply') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    const currentOfficerId = normalizeOfficerId(currentAdmin?.officerId || '')
+    if (!currentOfficerId) {
+      sendJson(response, 403, { ok: false, message: 'Officer access required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : ''
+    const replyMessage = typeof body.replyMessage === 'string' ? body.replyMessage.trim() : ''
+    if (!messageId || !replyMessage) {
+      sendJson(response, 400, { ok: false, message: 'Message id and reply are required.' })
+      return true
+    }
+
+    const contactMessage = usingMongo
+      ? await db.collection('contactMessages').findOne({ id: messageId })
+      : memoryStore.contactMessages.find((item) => item.id === messageId) || null
+
+    if (!contactMessage) {
+      sendJson(response, 404, { ok: false, message: 'Message not found.' })
+      return true
+    }
+
+    const recipientOfficerIds = Array.isArray(contactMessage.recipientOfficerIds)
+      ? contactMessage.recipientOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
+      : []
+    if (recipientOfficerIds.length && !recipientOfficerIds.includes(currentOfficerId)) {
+      sendJson(response, 403, { ok: false, message: 'You cannot reply to this message.' })
+      return true
+    }
+
+    const replySubject = contactMessage.subject
+      ? `Re: ${contactMessage.subject}`
+      : `Re: Message from ${contactMessage.name || contactMessage.email || 'a visitor'}`
+    const replyText = [
+      `Namaste ${contactMessage.name || 'there'},`,
+      '',
+      replyMessage,
+      '',
+      '---',
+      `Original message from ${contactMessage.name || 'a visitor'} (${contactMessage.email || 'no email'}):`,
+      contactMessage.message || '',
+    ].join('\n')
+    const replyHtml = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f1b18">
+        <p style="margin: 0 0 12px">Namaste ${escapeHtml(contactMessage.name || 'there')},</p>
+        <p style="white-space: pre-wrap; margin: 0 0 16px">${escapeHtml(replyMessage).replaceAll('\n', '<br />')}</p>
+        <hr style="border: none; border-top: 1px solid #ddd; margin: 16px 0" />
+        <p style="margin: 0 0 8px"><strong>Original message from ${escapeHtml(contactMessage.name || 'a visitor')} (${escapeHtml(contactMessage.email || 'no email')}):</strong></p>
+        <p style="white-space: pre-wrap; margin: 0">${escapeHtml(contactMessage.message || '').replaceAll('\n', '<br />')}</p>
+      </div>
+    `
+
+    const mailResult = await sendMail(env, {
+      to: contactMessage.email,
+      subject: replySubject,
+      text: replyText,
+      html: replyHtml,
+      replyTo: normalizeEmail(currentAdmin?.email || RECIPIENT_EMAIL),
+    })
+
+    const now = new Date().toISOString()
+    const replyUpdate = {
+      repliedAt: now,
+      repliedByOfficerId: currentOfficerId,
+      repliedByOfficerName: currentAdmin?.name || '',
+      replySubject,
+      replyMessage,
+      replyEmailSentAt: mailResult.sent ? now : '',
+      replyEmailError: mailResult.sent ? '' : mailResult.errorMessage || mailResult.reason || 'SMTP delivery failed.',
+      updatedAt: now,
+    }
+
+    if (usingMongo) {
+      await db.collection('contactMessages').updateOne(
+        { id: messageId },
+        {
+          $set: replyUpdate,
+          $addToSet: { readByOfficerIds: currentOfficerId },
+        },
+      )
+    } else {
+      const index = memoryStore.contactMessages.findIndex((item) => item.id === messageId)
+      if (index >= 0) {
+        memoryStore.contactMessages[index] = {
+          ...memoryStore.contactMessages[index],
+          ...replyUpdate,
+          readByOfficerIds: [
+            ...new Set([...(memoryStore.contactMessages[index].readByOfficerIds || []), currentOfficerId]),
+          ],
+        }
+      }
+    }
+
+    const updatedMessage = usingMongo
+      ? await db.collection('contactMessages').findOne({ id: messageId })
+      : memoryStore.contactMessages.find((item) => item.id === messageId) || null
+
+    sendJson(response, 200, {
+      ok: true,
+      message: mailResult.sent ? 'Reply sent.' : 'Reply saved, but email delivery failed.',
+      emailed: mailResult.sent,
+      mailStatus: mailResult.reason,
+      mailError: mailResult.errorMessage || '',
+      entry: serializeContactMessage(updatedMessage),
+    })
     return true
   }
 
@@ -3000,6 +3443,122 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       ok: true,
       blogPosts: blogPosts.map((item) => serializeBlogPost(item)),
     })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/priest-auth/community-events') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const communityEvents = await listCommunityEvents(db, { includeExpired: true })
+    sendJson(response, 200, {
+      ok: true,
+      communityEvents: communityEvents.map((item) => serializeCommunityEvent(item)),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/community-events') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const eventId = typeof body.eventId === 'string' ? body.eventId.trim() : ''
+    const payload = normalizeCommunityEventPayload(body)
+
+    if (!payload.title || !payload.detail) {
+      sendJson(response, 400, { ok: false, message: 'Title and details are required.' })
+      return true
+    }
+
+    if (payload.kind === 'recurring') {
+      if (!payload.scheduleLabel) {
+        sendJson(response, 400, { ok: false, message: 'Recurring events need a schedule label.' })
+        return true
+      }
+    } else if (!payload.eventDate) {
+      sendJson(response, 400, { ok: false, message: 'Ad-hoc events need a date.' })
+      return true
+    } else if (isExpiredCommunityEvent({ kind: payload.kind, eventDate: payload.eventDate })) {
+      sendJson(response, 400, { ok: false, message: 'Ad-hoc events must be in the future.' })
+      return true
+    }
+
+    if (payload.inPerson && !payload.address) {
+      sendJson(response, 400, { ok: false, message: 'In-person events need an address.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
+    const entry = {
+      id: eventId || randomUUID(),
+      title: payload.title,
+      detail: payload.detail,
+      section: payload.section,
+      kind: payload.kind,
+      scheduleLabel: payload.scheduleLabel,
+      eventDate: payload.eventDate,
+      inPerson: payload.inPerson,
+      address: payload.address,
+      placeId: payload.placeId,
+      mapsUrl: payload.mapsUrl,
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      createdAt: eventId ? (await findCommunityEventById(db, eventId))?.createdAt || now : now,
+      updatedAt: now,
+      createdByAdminId: currentAdmin.id,
+      createdByAdminName: currentAdmin.name || '',
+    }
+
+    await saveCommunityEvent(db, entry)
+    await pruneExpiredCommunityEvents(db)
+
+    const saved = await findCommunityEventById(db, entry.id)
+    sendJson(response, 200, {
+      ok: true,
+      message: eventId ? 'Community event updated.' : 'Community event added.',
+      communityEvent: serializeCommunityEvent(saved || entry),
+    })
+    return true
+  }
+
+  if (request.method === 'DELETE' && pathname === '/api/priest-auth/community-events') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const eventId = typeof request.url === 'string'
+      ? new URL(request.url, getConfiguredOrigin(env) || 'http://localhost').searchParams.get('eventId')?.trim() || ''
+      : ''
+    if (!eventId) {
+      sendJson(response, 400, { ok: false, message: 'Event id is required.' })
+      return true
+    }
+
+    const deleted = await deleteCommunityEventById(db, eventId)
+    if (!deleted) {
+      sendJson(response, 404, { ok: false, message: 'Community event not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { ok: true, message: 'Community event deleted.', eventId })
     return true
   }
 
@@ -3234,22 +3793,82 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       return true
     }
 
+    const now = new Date().toISOString()
+    const unsubscribeToken = generateSecret(24)
+    const unsubscribeTokenHash = hashSecret(unsubscribeToken)
     const entry = {
       email,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      unsubscribeTokenHash,
     }
 
     if (usingMongo) {
       await db.collection('newsletters').updateOne(
         { email },
-        { $setOnInsert: entry },
+        {
+          $setOnInsert: { email, createdAt: now },
+          $set: { unsubscribeTokenHash },
+        },
         { upsert: true },
       )
     } else if (!memoryStore.newsletters.some((item) => item.email === email)) {
       memoryStore.newsletters.unshift(entry)
+    } else {
+      memoryStore.newsletters = memoryStore.newsletters.map((item) =>
+        item.email === email ? { ...item, unsubscribeTokenHash } : item,
+      )
     }
 
-    sendJson(response, 200, { ok: true, message: 'Received.', entry })
+    const siteOrigin = getPublicSiteOrigin(env, request)
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Received.',
+      entry: {
+        email,
+        createdAt: now,
+      },
+      unsubscribeUrl: `${siteOrigin}/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`,
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/newsletters/unsubscribe') {
+    const body = await readJsonBody(request)
+    const email = normalizeEmail(body.email)
+    const token = typeof body.token === 'string' ? body.token.trim() : ''
+
+    if (!email && !token) {
+      sendJson(response, 400, { ok: false, message: 'Email or token is required.' })
+      return true
+    }
+
+    let deleted = false
+
+    if (usingMongo) {
+      if (token) {
+        const tokenHash = hashSecret(token)
+        const result = await db.collection('newsletters').deleteOne({ unsubscribeTokenHash: tokenHash })
+        deleted = Boolean(result.deletedCount)
+      } else if (email) {
+        const result = await db.collection('newsletters').deleteOne({ email })
+        deleted = Boolean(result.deletedCount)
+      }
+    } else if (token) {
+      const tokenHash = hashSecret(token)
+      const nextItems = memoryStore.newsletters.filter((item) => item.unsubscribeTokenHash !== tokenHash)
+      deleted = nextItems.length !== memoryStore.newsletters.length
+      memoryStore.newsletters = nextItems
+    } else if (email) {
+      const nextItems = memoryStore.newsletters.filter((item) => item.email !== email)
+      deleted = nextItems.length !== memoryStore.newsletters.length
+      memoryStore.newsletters = nextItems
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: deleted ? 'Unsubscribed.' : 'No subscription found.',
+      unsubscribed: deleted,
+    })
     return true
   }
 
@@ -4511,6 +5130,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const email = normalizeEmail(body.email)
     const phone = typeof body.phone === 'string' ? body.phone.trim() : ''
     const date = typeof body.date === 'string' ? body.date.trim() : ''
+    const location = typeof body.location === 'string' ? body.location.trim() : ''
+    const requestMode = typeof body.requestMode === 'string' ? body.requestMode.trim().toLowerCase() : 'virtual'
     const note = typeof body.note === 'string' ? body.note.trim() : ''
 
     if (!service || !name || !email || !note) {
@@ -4525,6 +5146,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       email,
       phone,
       date,
+      location,
+      requestMode,
       note,
       reviewedAt: '',
       paymentPageSentAt: '',
@@ -4565,16 +5188,18 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     )
 
     const subject = `Gourishankar Mandir service request: ${service}`
-    const text = `Order code: ${orderCode}\nService: ${service}\nName: ${name}\nEmail: ${email}\nPhone: ${phone || 'Not provided'}\nDate: ${date || 'Not selected'}\n\n${note}`
+    const text = `Order code: ${orderCode}\nService: ${service}\nMode: ${requestMode === 'in-person' ? 'In-person quote' : 'Virtual'}\nName: ${name}\nEmail: ${email}\nPhone: ${phone || 'Not provided'}\nDate: ${date || 'Not selected'}\nLocation: ${location || 'Not provided'}\n\n${note}`
     const html = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f1b18">
         <h2 style="margin: 0 0 12px">Gourishankar Mandir service request</h2>
         <p style="margin: 0 0 8px"><strong>Order code:</strong> ${escapeHtml(orderCode)}</p>
         <p style="margin: 0 0 8px"><strong>Service:</strong> ${escapeHtml(service)}</p>
+        <p style="margin: 0 0 8px"><strong>Mode:</strong> ${escapeHtml(requestMode === 'in-person' ? 'In-person quote' : 'Virtual')}</p>
         <p style="margin: 0 0 8px"><strong>Name:</strong> ${escapeHtml(name)}</p>
         <p style="margin: 0 0 8px"><strong>Email:</strong> ${escapeHtml(email)}</p>
         <p style="margin: 0 0 8px"><strong>Phone:</strong> ${escapeHtml(phone || 'Not provided')}</p>
         <p style="margin: 0 0 8px"><strong>Date:</strong> ${escapeHtml(date || 'Not selected')}</p>
+        <p style="margin: 0 0 8px"><strong>Location:</strong> ${escapeHtml(location || 'Not provided')}</p>
         <p style="white-space: pre-wrap; margin: 16px 0 0">${escapeHtml(note).replaceAll('\n', '<br />')}</p>
       </div>
     `
@@ -5705,6 +6330,15 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     return true
   }
 
+  if (request.method === 'GET' && pathname === '/api/community-events') {
+    const events = await listCommunityEvents(db)
+    sendJson(response, 200, {
+      ok: true,
+      communityEvents: events.map((item) => serializeCommunityEvent(item)),
+    })
+    return true
+  }
+
   if (request.method === 'POST' && pathname === '/api/contact-email') {
     const body = await readJsonBody(request)
     const name = typeof body.name === 'string' ? body.name.trim() : ''
@@ -5712,18 +6346,41 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const phone = typeof body.phone === 'string' ? body.phone.trim() : ''
     const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
     const message = typeof body.message === 'string' ? body.message.trim() : ''
+    const recipientOfficerId = typeof body.recipientOfficerId === 'string' ? body.recipientOfficerId.trim() : ''
+    const recipientOfficerIds = Array.isArray(body.recipientOfficerIds)
+      ? body.recipientOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
+      : []
 
     if (!name || !email || !message) {
       sendJson(response, 400, { ok: false, message: 'Name, email, and message are required.' })
       return true
     }
 
+    const requestedOfficerIds = recipientOfficerId ? [recipientOfficerId] : recipientOfficerIds
+    const recipients = await getContactRecipients(db, requestedOfficerIds, requestedOfficerIds.length === 0)
+    if (!recipients.length) {
+      sendJson(response, 400, { ok: false, message: 'No recipient officer was found.' })
+      return true
+    }
+
     const entry = {
+      id: randomUUID(),
       name,
       email,
       phone,
       subject,
       message,
+      recipientOfficerIds: recipients.map((item) => item.officerId),
+      recipientOfficerNames: recipients.map((item) => item.name),
+      hiddenForOfficerIds: [],
+      readByOfficerIds: [],
+      repliedAt: '',
+      repliedByOfficerId: '',
+      repliedByOfficerName: '',
+      replySubject: '',
+      replyMessage: '',
+      replyEmailSentAt: '',
+      replyEmailError: '',
       createdAt: new Date().toISOString(),
     }
 
@@ -5742,23 +6399,37 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         <p style="margin: 0 0 8px"><strong>Email:</strong> ${escapeHtml(email)}</p>
         <p style="margin: 0 0 8px"><strong>Phone:</strong> ${escapeHtml(phone || 'Not provided')}</p>
         <p style="margin: 0 0 8px"><strong>Subject:</strong> ${escapeHtml(subject || 'General message')}</p>
+        <p style="margin: 0 0 8px"><strong>Recipients:</strong> ${escapeHtml(recipients.map((item) => item.name).join(', '))}</p>
         <p style="white-space: pre-wrap; margin: 16px 0 0">${escapeHtml(message).replaceAll('\n', '<br />')}</p>
       </div>
     `
 
-    const mailResult = await sendMail(env, {
-      subject: finalSubject,
-      text,
-      html,
-      replyTo: email,
-    })
+    const mailResults = await Promise.all(
+      recipients.map((recipient) =>
+        sendMail(env, {
+          to: recipient.email,
+          subject: finalSubject,
+          text,
+          html: html.replace(
+            /<strong>Recipients:<\/strong>[^<]*<\/p>/,
+            `<strong>Recipients:</strong> ${escapeHtml(recipient.name)}${recipient.title ? ` (${escapeHtml(recipient.title)})` : ''}</p>`,
+          ),
+          replyTo: email,
+        }),
+      ),
+    )
+
+    const sentCount = mailResults.filter((result) => result.sent).length
+    const mailError = mailResults.find((result) => !result.sent && result.errorMessage)?.errorMessage || ''
 
     sendJson(response, 200, {
       ok: true,
       message: 'Received.',
-      emailed: mailResult.sent,
-      mailStatus: mailResult.reason,
-      mailError: mailResult.errorMessage || '',
+      emailed: sentCount > 0,
+      mailStatus: sentCount === recipients.length ? 'sent' : sentCount > 0 ? 'partial' : mailResults[0]?.reason || 'smtp_error',
+      mailError,
+      emailedCount: sentCount,
+      recipientCount: recipients.length,
       entry,
     })
     return true

@@ -8,13 +8,22 @@ export {
 
 export const navItems = [
   { path: "/", label: "Home" },
+  { path: "/services", label: "Services" },
   { path: "/blog", label: "Blog" },
   { path: "/about", label: "About" },
-  { path: "/services", label: "Services" },
   { path: "/community", label: "Community" },
-  { path: "/resources", label: "Resources" },
   { path: "/track-order", label: "Track Order" },
   { path: "/contact", label: "Contact" },
+];
+
+export const legalLinks = [
+  { path: '/privacy', label: 'Privacy Policy' },
+  { path: '/terms', label: 'Terms of Use' },
+  { path: '/refund-policy', label: 'Refund & Cancellation' },
+  { path: '/email-consent', label: 'Email Consent' },
+  { path: '/unsubscribe', label: 'Unsubscribe' },
+  { path: '/community-guidelines', label: 'Community Guidelines' },
+  { path: '/children-privacy', label: 'Children’s Privacy' },
 ];
 
 export const officers = [
@@ -124,12 +133,6 @@ export const communityPillars = [
   "Satsang, reflection, and shared experience.",
   "Gatherings for classes, rituals, workshops, and observances.",
   "Membership for regular attendees and ongoing participation.",
-];
-
-export const resourceDetails = [
-  "Prayers, sacred texts, chants, and mantras for daily devotion.",
-  "Festival dates and fasting observances for the year.",
-  "Links to related organizations and service groups.",
 ];
 
 export const serviceBookingSteps = [
@@ -249,21 +252,6 @@ export const communityItems = [
   "Satsang, reflection, and shared learning",
   "Upcoming observances, workshops, and gatherings",
   "Membership for classes, archives, and ongoing participation",
-];
-
-export const resourceItems = [
-  "Texts, mantras, bhajans, and daily prayers",
-  "Festival and fasting dates for the year",
-  "Links to charities, partner organizations, and spiritual causes",
-];
-
-export const socialChannels = [
-  {
-    label: "Facebook",
-    detail: "Community posts and devotional announcements.",
-  },
-  { label: "Instagram", detail: "Photo highlights and festival moments." },
-  { label: "YouTube", detail: "Meditations, lectures, and temple teachings." },
 ];
 
 export const festivalSchedule = [

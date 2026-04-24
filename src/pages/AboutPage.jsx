@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import { historyMilestones, missionPillars, officers as officerProfiles } from '../content.js'
 import { loadOfficers } from '../lib/siteApi.js'
 
@@ -144,6 +145,12 @@ function AboutPage() {
                         <span className="profile-role">{officer.role}</span>
                         <h3 className="h4">{officer.name}</h3>
                         <p>{officer.description}</p>
+                        <NavLink
+                          className="btn btn-outline-light rounded-pill px-4 mt-2"
+                          to={`/contact?officerId=${encodeURIComponent(officer.id)}`}
+                        >
+                          Contact
+                        </NavLink>
                       </div>
                     </article>
                   ))}

@@ -17,7 +17,13 @@ import PriestProfilePage from './pages/PriestProfilePage.jsx'
 import PriestPaymentRequestPage from './pages/PriestPaymentRequestPage.jsx'
 import PriestReviewPage from './pages/PriestReviewPage.jsx'
 import PriestToolsPage from './pages/PriestToolsPage.jsx'
-import ResourcesPage from './pages/ResourcesPage.jsx'
+import PrivacyPage from './pages/PrivacyPage.jsx'
+import TermsPage from './pages/TermsPage.jsx'
+import RefundPolicyPage from './pages/RefundPolicyPage.jsx'
+import EmailConsentPage from './pages/EmailConsentPage.jsx'
+import CommunityGuidelinesPage from './pages/CommunityGuidelinesPage.jsx'
+import ChildrenPrivacyPage from './pages/ChildrenPrivacyPage.jsx'
+import UnsubscribePage from './pages/UnsubscribePage.jsx'
 import ServicesPage from './pages/ServicesPage.jsx'
 import TrackOrderPage from './pages/TrackOrderPage.jsx'
 
@@ -32,7 +38,6 @@ function App() {
         <Route path="community" element={<CommunityPage />} />
         <Route path="blog" element={<BlogPage />} />
         <Route path="blog/:postId" element={<BlogPage />} />
-        <Route path="resources" element={<ResourcesPage />} />
         <Route path="contact" element={<ContactPage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="login" element={<LoginPage />} />
@@ -44,6 +49,13 @@ function App() {
         <Route path="order/:orderCode" element={<OrderDetailsPage />} />
         <Route path="orders/:orderCode" element={<OrderDetailsPage />} />
         <Route path="payments" element={<PaymentsPage />} />
+        <Route path="privacy" element={<PrivacyPage />} />
+        <Route path="terms" element={<TermsPage />} />
+        <Route path="refund-policy" element={<RefundPolicyPage />} />
+        <Route path="email-consent" element={<EmailConsentPage />} />
+        <Route path="unsubscribe" element={<UnsubscribePage />} />
+        <Route path="community-guidelines" element={<CommunityGuidelinesPage />} />
+        <Route path="children-privacy" element={<ChildrenPrivacyPage />} />
         <Route path="admin" element={<Navigate to="/priest-review" replace />} />
         <Route path="priest-review" element={<PriestReviewPage />} />
         <Route path="priest-tools" element={<PriestToolsPage />} />

@@ -38,6 +38,10 @@ export async function loadBlogPosts() {
   return requestJson('/api/blog-posts')
 }
 
+export async function loadCommunityEvents() {
+  return requestJson('/api/community-events')
+}
+
 export async function loadBlogPost(postId) {
   const params = new URLSearchParams()
   params.set('postId', postId || '')
@@ -227,6 +231,13 @@ export async function createNewsletter(email) {
   })
 }
 
+export async function unsubscribeNewsletter(payload) {
+  return requestJson('/api/newsletters/unsubscribe', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function createServiceRequest(payload) {
   return requestJson('/api/service-requests', {
     method: 'POST',
@@ -303,8 +314,51 @@ export async function createRsvp(event) {
   })
 }
 
+export async function createCommunityEvent(payload) {
+  return requestJson('/api/priest-auth/community-events', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateCommunityEvent(payload) {
+  return requestJson('/api/priest-auth/community-events', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteCommunityEvent(eventId) {
+  const params = new URLSearchParams()
+  params.set('eventId', eventId || '')
+  return requestJson(`/api/priest-auth/community-events?${params.toString()}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function createContactMessage(payload) {
   return requestJson('/api/contact-email', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteContactMessage(payload) {
+  return requestJson('/api/priest-auth/contact-messages/delete', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function markContactMessageRead(payload) {
+  return requestJson('/api/priest-auth/contact-messages/read', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function replyContactMessage(payload) {
+  return requestJson('/api/priest-auth/contact-messages/reply', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

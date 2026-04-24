@@ -212,8 +212,13 @@ function AccountPage() {
     setAccountError('')
     try {
       await logoutUser()
-      await loadAccount()
-      window.dispatchEvent(new Event('mandir-user-updated'))
+      setAuth({ loading: false, authenticated: false, user: null })
+      setOrdersState({
+        loading: false,
+        orders: [],
+        summary: { totalOrders: 0, inProgress: 0, completed: 0 },
+      })
+      window.dispatchEvent(new CustomEvent('mandir-user-updated', { detail: { authenticated: false, user: null } }))
       setAccountMessage('Signed out.')
     } catch (error) {
       setAccountError(error?.message || 'Unable to sign out.')

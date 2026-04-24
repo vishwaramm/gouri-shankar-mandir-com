@@ -1,15 +1,48 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   communityItems,
   communityPillars,
-  eventSchedule,
-  festivalSchedule,
   membershipPlans,
 } from '../content.js'
-import { createRsvp } from '../lib/siteApi.js'
+import { createRsvp, loadCommunityEvents } from '../lib/siteApi.js'
+
+function formatEventDate(value) {
+  if (!value) return ''
+  const date = new Date(`${value}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function buildGoogleMapsLink(event) {
+  if (event.mapsUrl) return event.mapsUrl
+  if (!event.address) return ''
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}`
+}
 
 function CommunityPage() {
   const [rsvpStatus, setRsvpStatus] = useState('')
+  const [communityEvents, setCommunityEvents] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+    loadCommunityEvents()
+      .then((result) => {
+        if (cancelled) return
+        setCommunityEvents(Array.isArray(result.communityEvents) ? result.communityEvents : [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCommunityEvents([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleRsvp = (eventLabel) => {
     createRsvp(eventLabel)
@@ -20,6 +53,48 @@ function CommunityPage() {
         setRsvpStatus('Unable to save right now.')
       })
   }
+
+  const communityEventCards = useMemo(
+    () =>
+      communityEvents.map((event) => ({
+        id: event.id,
+        title: event.title || '',
+        time: event.kind === 'ad-hoc' ? formatEventDate(event.eventDate) : event.scheduleLabel || 'Recurring',
+        detail: event.detail,
+        location: event.inPerson ? event.address || 'In person' : 'Virtual',
+        mapsUrl: buildGoogleMapsLink(event),
+        section: event.section || 'events',
+        kind: event.kind || 'recurring',
+      })),
+    [communityEvents],
+  )
+
+  const eventsSectionItems = useMemo(() => {
+    return communityEventCards
+      .filter((event) => event.section === 'events')
+      .map((event) => ({
+        title: event.title,
+        time: event.time,
+        detail: event.detail,
+        location: event.location,
+        mapsUrl: event.mapsUrl,
+        dynamic: true,
+        kind: event.kind,
+      }))
+  }, [communityEventCards])
+
+  const observanceItems = useMemo(() => {
+    return communityEventCards
+      .filter((event) => event.section === 'observances')
+      .map((event) => ({
+        date: event.time,
+        title: event.title,
+        note: event.detail,
+        location: event.location,
+        mapsUrl: event.mapsUrl,
+        dynamic: true,
+      }))
+  }, [communityEventCards])
 
   return (
     <main>
@@ -80,19 +155,23 @@ function CommunityPage() {
 
             <div className="col-lg-4">
               <article className="surface surface-strong surface-pad h-100">
-                <p className="section-kicker">Observances</p>
-                <h2 className="section-title mb-3">Upcoming gatherings.</h2>
-                <div className="timeline-list">
-                  {festivalSchedule.map((item) => (
-                    <div className="timeline-item" key={item.title}>
-                      <time>{item.date}</time>
-                      <div>
-                        <h3 className="h5 mb-1">{item.title}</h3>
-                        <p>{item.note}</p>
+                <p className="section-kicker">Astrological calendar</p>
+                <h2 className="section-title mb-3">Observances.</h2>
+                {observanceItems.length ? (
+                  <div className="timeline-list">
+                    {observanceItems.map((item) => (
+                      <div className="timeline-item" key={`${item.title}-${item.date || item.time}`}>
+                        <time>{item.date || item.time}</time>
+                        <div>
+                          <h3 className="h5 mb-1">{item.title}</h3>
+                          <p>{item.note || item.detail}</p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="surface surface-soft surface-pad">No observances at this time.</div>
+                )}
               </article>
             </div>
 
@@ -140,35 +219,58 @@ function CommunityPage() {
             <div className="d-flex flex-column flex-lg-row align-items-lg-end justify-content-between gap-3 mb-4">
               <div>
                 <p className="section-kicker">Events</p>
-                <h2 className="section-title mb-0">Upcoming gatherings.</h2>
+                <h2 className="section-title mb-0">Community events.</h2>
               </div>
-              <p className="section-intro mb-0">Each event marks a gathering point.</p>
+              <p className="section-intro mb-0">Gatherings and announcements from the mandir.</p>
             </div>
 
-            <div className="timeline-list">
-              {eventSchedule.map((event, index) => (
-                <article className="event-row surface-soft surface-pad reveal" key={event.title} style={{ animationDelay: `${index * 90}ms` }}>
-                  <div className="row g-3 align-items-center">
-                    <div className="col-lg-3">
-                      <span className="metric-label">{event.time}</span>
-                      <h3 className="h4 mb-0">{event.title}</h3>
+            {eventsSectionItems.length ? (
+              <div className="timeline-list">
+                {eventsSectionItems.map((event, index) => (
+                  <article
+                    className="event-row surface-soft surface-pad reveal"
+                    key={`${event.title}-${event.time}-${index}`}
+                    style={{ animationDelay: `${index * 90}ms` }}
+                  >
+                    <div className="row g-3 align-items-center">
+                      <div className="col-lg-3">
+                        <span className="metric-label">{event.time}</span>
+                        <h3 className="h4 mb-0">{event.title}</h3>
+                      </div>
+                      <div className="col-lg-6">
+                        <p className="mb-0">{event.detail}</p>
+                        {event.location ? (
+                          <a
+                            className="d-inline-block mt-2 small text-secondary text-break"
+                            href={event.mapsUrl || '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(clickEvent) => {
+                              if (!event.mapsUrl) {
+                                clickEvent.preventDefault()
+                              }
+                            }}
+                          >
+                            {event.location}
+                          </a>
+                        ) : null}
+                      </div>
+                      <div className="col-lg-3 text-lg-end">
+                        <button
+                          type="button"
+                          className="btn btn-outline-primary rounded-pill"
+                          onClick={() => handleRsvp(`${event.time} · ${event.title}`)}
+                        >
+                          Mark interest
+                        </button>
+                      </div>
                     </div>
-                    <div className="col-lg-6">
-                      <p className="mb-0">{event.detail}</p>
-                    </div>
-                    <div className="col-lg-3 text-lg-end">
-                      <button
-                        type="button"
-                        className="btn btn-outline-primary rounded-pill"
-                        onClick={() => handleRsvp(`${event.time} · ${event.title}`)}
-                      >
-                        Mark interest
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="surface surface-soft surface-pad">No events at this time.</div>
+            )}
             {rsvpStatus ? <p className="mt-4 mb-0 text-secondary">{rsvpStatus}</p> : null}
           </div>
         </div>

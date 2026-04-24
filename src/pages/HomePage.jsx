@@ -38,7 +38,7 @@ const featuredServicePaths = [
     kicker: 'Most requested',
     summary:
       'For birthdays, anniversaries, blessings, and focused household worship when you want a calm, complete rite.',
-    highlights: ['Priest review and sankalp guidance', 'Virtual or guided at home', 'Suggested contribution already shown'],
+    highlights: ['Priest review and sankalp guidance', 'Virtual service', 'Suggested contribution already shown'],
     secondaryCta: 'Browse services',
     layout: 'spotlight',
   },

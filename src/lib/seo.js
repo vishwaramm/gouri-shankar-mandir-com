@@ -38,11 +38,6 @@ const ROUTE_SEO = {
     description:
       'Read a temple update from the officers with embedded media when available.',
   },
-  '/resources': {
-    title: `Resources | Prayers, Festival Dates, and Teaching Materials`,
-    description:
-      'Find prayers, sacred texts, festival dates, and temple resources for daily devotion and study.',
-  },
   '/contact': {
     title: `Contact | Write to ${SITE_NAME}`,
     description:
@@ -106,6 +101,41 @@ const ROUTE_SEO = {
     title: `Payments | ${SITE_NAME}`,
     description:
       'Complete a secure payment for a selected service or contribution.',
+    robots: 'noindex, nofollow',
+  },
+  '/privacy': {
+    title: `Privacy Policy | ${SITE_NAME}`,
+    description: 'Read how Gourishankar Mandir collects, uses, stores, and protects personal information.',
+    robots: 'noindex, nofollow',
+  },
+  '/terms': {
+    title: `Terms of Use | ${SITE_NAME}`,
+    description: 'Review the terms that apply when you use the Gourishankar Mandir website and services.',
+    robots: 'noindex, nofollow',
+  },
+  '/refund-policy': {
+    title: `Refund & Cancellation Policy | ${SITE_NAME}`,
+    description: 'Read the strict refund and cancellation rules that apply to temple services and payments.',
+    robots: 'noindex, nofollow',
+  },
+  '/email-consent': {
+    title: `Email Consent | ${SITE_NAME}`,
+    description: 'See how temple letters and service emails are sent and how to opt out.',
+    robots: 'noindex, nofollow',
+  },
+  '/unsubscribe': {
+    title: `Unsubscribe | ${SITE_NAME}`,
+    description: 'Remove your email address from temple letters and announcements.',
+    robots: 'noindex, nofollow',
+  },
+  '/community-guidelines': {
+    title: `Community Guidelines | ${SITE_NAME}`,
+    description: 'Read the rules for posts, messages, and community participation on the site.',
+    robots: 'noindex, nofollow',
+  },
+  '/children-privacy': {
+    title: `Children’s Privacy | ${SITE_NAME}`,
+    description: 'Read the notice about children’s information and family participation on the site.',
     robots: 'noindex, nofollow',
   },
   '/admin': {

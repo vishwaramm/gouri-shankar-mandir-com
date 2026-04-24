@@ -9,7 +9,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: '$250.00 for less than 1 hour',
     contributionAmountCents: 25000,
     timing: 'Less than 1 hour',
-    delivery: 'Virtual or guided at home',
+    delivery: 'Virtual',
   },
   {
     title: 'Pooja - 1 to 1.75 hours',
@@ -21,7 +21,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: '$425.00 for 1 to 1.75 hours',
     contributionAmountCents: 42500,
     timing: '1 to 1.75 hours',
-    delivery: 'Virtual or guided at home',
+    delivery: 'Virtual',
   },
   {
     title: 'Pooja - 2 to 2.5 hours',
@@ -33,7 +33,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: '$600.00 for 2 to 2.5 hours',
     contributionAmountCents: 60000,
     timing: '2 to 2.5 hours',
-    delivery: 'Virtual or guided at home',
+    delivery: 'Virtual',
   },
   {
     title: 'Pooja - Over 2.5 hours',
@@ -45,7 +45,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: 'Custom quote',
     contributionAmountCents: null,
     timing: 'Over 2.5 hours, to be determined',
-    delivery: 'Virtual or guided at home',
+    delivery: 'Virtual',
   },
   {
     title: 'Yagnas - Reading Only',
@@ -57,7 +57,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: '$575.00 for 1.5 hours',
     contributionAmountCents: 57500,
     timing: '1.5 hours',
-    delivery: 'Virtual coordination or temple-led',
+    delivery: 'Virtual',
   },
   {
     title: 'Astrology Reading - General',
@@ -117,7 +117,7 @@ const DEFAULT_SERVICE_OFFERINGS = [
     contribution: 'Custom quote',
     contributionAmountCents: null,
     timing: 'Plan well in advance',
-    delivery: 'Temple-led or guided virtual planning',
+    delivery: 'Temple-led',
   },
 ]
 

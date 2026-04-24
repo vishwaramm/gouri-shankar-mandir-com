@@ -26,9 +26,9 @@ const serviceFaqItems = [
       'Some services have a suggested contribution range. Larger rites, travel, or custom ceremonies are quoted separately.',
   },
   {
-    question: 'Can virtual and in-person services both be arranged?',
+    question: 'Can services be arranged in different settings?',
     answer:
-      'Yes. The mandir can coordinate virtual participation, temple-led rites, or guided preparation depending on the service and occasion.',
+      'Yes. Some services are handled online, and location-specific visits are quoted separately based on travel and setup.',
   },
 ]
 
@@ -38,6 +38,7 @@ const initialRequest = {
   email: '',
   phone: '',
   date: '',
+  location: '',
   note: '',
 }
 
@@ -95,6 +96,7 @@ function ServicesPage() {
     service: selectedService?.title ?? initialRequest.service,
   }))
   const [requestModalOpen, setRequestModalOpen] = useState(() => Boolean(selectedService))
+  const [requestMode, setRequestMode] = useState('virtual')
   const [activeBookingStep, setActiveBookingStep] = useState(0)
   const [requestStatus, setRequestStatus] = useState(() =>
     selectedService
@@ -127,9 +129,14 @@ function ServicesPage() {
     setServiceRequest((current) => ({ ...current, [name]: value }))
   }
 
-  const openRequestModal = (service) => {
+  const openRequestModal = (service, mode = 'virtual') => {
     setServiceRequest((current) => ({ ...current, service }))
-    setRequestStatus(`Selected ${service}.`)
+    setRequestMode(mode)
+    setRequestStatus(
+      mode === 'in-person'
+        ? 'In-person visits are quoted based on location.'
+        : `Selected ${service}.`,
+    )
     setRequestOutcome(null)
     setRequestModalOpen(true)
   }
@@ -156,9 +163,11 @@ function ServicesPage() {
     event.preventDefault()
     const payload = {
       ...serviceRequest,
+      requestMode,
     }
 
     if (!payload.name || !payload.email || !payload.note) return
+    if (requestMode === 'in-person' && !payload.location) return
 
     createServiceRequest(payload)
       .then((result) => {
@@ -182,6 +191,7 @@ function ServicesPage() {
               : 'Your request was received and emailed to the priest team.',
         })
         setServiceRequest(initialRequest)
+        setRequestMode('virtual')
       })
       .catch(() => {
         setRequestStatus('Unable to send right now.')
@@ -421,12 +431,22 @@ function ServicesPage() {
                     <button
                       type="button"
                       className="btn btn-outline-primary rounded-pill px-4"
-                      onClick={() => openRequestModal(card.title)}
+                      onClick={() => openRequestModal(card.title, 'virtual')}
                     >
                       Request this
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary rounded-pill px-4 ms-2"
+                      onClick={() => openRequestModal(card.title, 'in-person')}
+                    >
+                      In person quote
+                    </button>
                     <p className="small text-secondary mt-3 mb-0 service-policy-note">
                       Refund or cancellation requests can be submitted from your order page after review.
+                    </p>
+                    <p className="small text-secondary mt-2 mb-0">
+                      In-person visits are quoted separately based on location.
                     </p>
                   </article>
                 </div>
@@ -472,7 +492,7 @@ function ServicesPage() {
                             return
                           }
 
-                          openRequestModal(card.title)
+                          openRequestModal(card.title, 'virtual')
                         } catch {
                           setRequestStatus('Unable to open the payment page right now.')
                           setRequestModalOpen(true)
@@ -481,9 +501,19 @@ function ServicesPage() {
                     >
                       {card.contributionAmountCents ? 'Start this service' : 'Request quote'}
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary rounded-pill"
+                      onClick={() => openRequestModal(card.title, 'in-person')}
+                    >
+                      In person quote
+                    </button>
                   </div>
                   <p className="small text-secondary mt-3 mb-0 service-policy-note">
                     Refund and cancellation requests are available from your order page after the request is reviewed.
+                  </p>
+                  <p className="small text-secondary mt-2 mb-0">
+                    In-person visits are quoted separately based on location.
                   </p>
                   <p className="service-timing">{card.timing}</p>
                   <div className="service-prep-note mt-3">
@@ -605,8 +635,15 @@ function ServicesPage() {
                 <div>
                   <p className="section-kicker">Request form</p>
                   <h2 id="serviceRequestDialogTitle" className="h3 mb-2">
-                    Request {serviceRequest.service}
+                    {requestMode === 'in-person'
+                      ? `In-person quote for ${serviceRequest.service}`
+                      : `Request ${serviceRequest.service}`}
                   </h2>
+                  {requestMode === 'in-person' ? (
+                    <p className="mb-0 text-secondary">
+                      In-person visits are quoted based on location and travel.
+                    </p>
+                  ) : null}
               </div>
               <button
                 type="button"
@@ -700,6 +737,19 @@ function ServicesPage() {
                   onChange={handleServiceRequestChange}
                 />
               </div>
+              {requestMode === 'in-person' ? (
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold text-primary-emphasis">Location</label>
+                  <input
+                    name="location"
+                    className="form-control"
+                    value={serviceRequest.location}
+                    onChange={handleServiceRequestChange}
+                    placeholder="City, state, venue, or temple location"
+                    required
+                  />
+                </div>
+              ) : null}
               <div className="col-12">
                 <label className="form-label fw-semibold text-primary-emphasis">Intention</label>
                 <textarea
@@ -707,14 +757,18 @@ function ServicesPage() {
                   className="form-control"
                   value={serviceRequest.note}
                   onChange={handleServiceRequestChange}
-                  placeholder="Share the occasion, deity, chart topic, or prayer intention."
+                  placeholder={
+                    requestMode === 'in-person'
+                      ? 'Share the occasion, location details, and prayer intention.'
+                      : 'Share the occasion, deity, chart topic, or prayer intention.'
+                  }
                   rows="5"
                   required
                 />
               </div>
               <div className="col-12 d-flex flex-wrap align-items-center gap-3">
                 <button type="submit" className="btn btn-primary btn-lg rounded-pill px-4">
-                  Submit request
+                  {requestMode === 'in-person' ? 'Request in-person quote' : 'Submit request'}
                 </button>
                 <p className={`mb-0 text-secondary ${requestStatus ? 'fw-semibold' : ''}`}>
                   {requestStatus}

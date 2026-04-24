@@ -1,17 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { faqItems } from '../content.js'
-import { createContactMessage, createNewsletter } from '../lib/siteApi.js'
+import { createContactMessage, createNewsletter, loadOfficers } from '../lib/siteApi.js'
 
 function ContactPage() {
   const [searchParams] = useSearchParams()
   const [isSubscribed, setIsSubscribed] = useState(false)
+  const [unsubscribeUrl, setUnsubscribeUrl] = useState('')
   const [faqOpen, setFaqOpen] = useState(0)
+  const [officers, setOfficers] = useState([])
   const [directEmail, setDirectEmail] = useState({
     name: '',
     email: '',
     subject: searchParams.get('subject')?.trim() || '',
     message: searchParams.get('message')?.trim() || '',
+    recipientOfficerId: searchParams.get('officerId')?.trim() || 'all',
   })
   const [emailStatus, setEmailStatus] = useState({
     type: 'idle',
@@ -19,18 +22,56 @@ function ContactPage() {
   })
   const [isSendingEmail, setIsSendingEmail] = useState(false)
 
+  useEffect(() => {
+    let active = true
+
+    loadOfficers()
+      .then((data) => {
+        if (!active) return
+        setOfficers(Array.isArray(data.officers) ? data.officers : [])
+      })
+      .catch(() => {
+        if (!active) return
+        setOfficers([])
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const selectedRecipient = useMemo(() => {
+    const officerId = directEmail.recipientOfficerId?.trim() || 'all'
+    if (officerId === 'all') return null
+    return officers.find((item) => item.id === officerId) || null
+  }, [directEmail.recipientOfficerId, officers])
+
+  useEffect(() => {
+    if (!officers.length) return
+    const currentOfficerId = directEmail.recipientOfficerId?.trim() || 'all'
+    if (currentOfficerId === 'all') return
+    if (officers.some((item) => item.id === currentOfficerId)) return
+
+    setDirectEmail((current) => ({
+      ...current,
+      recipientOfficerId: 'all',
+    }))
+  }, [directEmail.recipientOfficerId, officers])
+
   const handleNewsletterSubmit = (event) => {
     event.preventDefault()
     const email = event.currentTarget.email.value.trim()
     if (!email) return
 
     createNewsletter(email)
-      .then(() => {
+      .then((result) => {
         setIsSubscribed(true)
+        setUnsubscribeUrl(result.unsubscribeUrl || '')
         event.currentTarget.reset()
       })
       .catch(() => {
         setIsSubscribed(false)
+        setUnsubscribeUrl('')
       })
   }
 
@@ -46,16 +87,17 @@ function ContactPage() {
       email: directEmail.email.trim(),
       subject: directEmail.subject.trim(),
       message: directEmail.message.trim(),
+      recipientOfficerId: directEmail.recipientOfficerId.trim(),
     }
 
     if (!payload.name || !payload.email || !payload.message) return
 
-      try {
-        setIsSendingEmail(true)
-        setEmailStatus({
-          type: 'pending',
-          message: 'Sending...',
-        })
+    try {
+      setIsSendingEmail(true)
+      setEmailStatus({
+        type: 'pending',
+        message: 'Sending...',
+      })
 
       const result = await createContactMessage(payload)
 
@@ -80,6 +122,7 @@ function ContactPage() {
         email: '',
         subject: '',
         message: '',
+        recipientOfficerId: 'all',
       })
     } catch (error) {
       setEmailStatus({
@@ -158,6 +201,13 @@ function ContactPage() {
                     <p className={`mb-0 text-secondary ${isSubscribed ? 'fw-semibold' : ''}`}>
                       {isSubscribed ? 'Noted.' : 'Enter your email for temple letters.'}
                     </p>
+                    {isSubscribed && unsubscribeUrl ? (
+                      <div className="mt-2">
+                        <a className="btn btn-outline-dark btn-sm" href={unsubscribeUrl}>
+                          Manage temple letters
+                        </a>
+                      </div>
+                    ) : null}
                   </div>
                 </form>
               </div>
@@ -178,6 +228,27 @@ function ContactPage() {
 
               <div className="col-lg-8">
                 <form className="row g-3" onSubmit={handleDirectEmailSubmit}>
+                  <div className="col-12">
+                    <label className="form-label fw-semibold text-primary-emphasis">Send to</label>
+                    <select
+                      className="form-select"
+                      name="recipientOfficerId"
+                      value={directEmail.recipientOfficerId}
+                      onChange={handleDirectEmailChange}
+                    >
+                      <option value="all">All officers</option>
+                      {officers.map((officer) => (
+                        <option key={officer.id} value={officer.id}>
+                          {officer.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="small text-secondary mt-2 mb-0">
+                      {selectedRecipient
+                        ? `This message will go to ${selectedRecipient.name}.`
+                        : 'This message will go to all officers.'}
+                    </p>
+                  </div>
                   <div className="col-md-6">
                     <label className="form-label fw-semibold text-primary-emphasis">Name</label>
                     <input
