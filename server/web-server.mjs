@@ -64,8 +64,9 @@ function safeDecodePathname(pathname) {
 }
 
 function resolveWithinRoot(rootDir, pathname) {
-  const normalized = normalize(`.${safeDecodePathname(pathname)}`)
-  const filePath = resolve(rootDir, `.${normalized}`)
+  const decodedPath = safeDecodePathname(pathname).replace(/^\/+/, '')
+  const normalized = normalize(decodedPath)
+  const filePath = resolve(rootDir, normalized)
   if (!filePath.startsWith(rootDir)) return null
   return filePath
 }
