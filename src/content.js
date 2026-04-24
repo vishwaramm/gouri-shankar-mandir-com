@@ -8,9 +8,9 @@ export {
 
 export const navItems = [
   { path: "/", label: "Home" },
+  { path: "/blog", label: "Blog" },
   { path: "/about", label: "About" },
   { path: "/services", label: "Services" },
-  { path: "/education", label: "Education" },
   { path: "/community", label: "Community" },
   { path: "/resources", label: "Resources" },
   { path: "/track-order", label: "Track Order" },
@@ -19,6 +19,7 @@ export const navItems = [
 
 export const officers = [
   {
+    id: "gouri-maharaj",
     name: "Dr. Pandit Gouri Maharaj",
     role: "Spiritual Guide",
     photo: "/images/officers/gouri-maharaj.png",
@@ -26,6 +27,7 @@ export const officers = [
       "Offers devotional leadership, scriptural insight, and steady guidance for families and daily practice.",
   },
   {
+    id: "vishwaram-maharaj",
     name: "Pandit Vishwaram Maharaj",
     role: "Temple Director",
     photo: "/images/officers/vishwaram-maharaj.jpg",
@@ -33,18 +35,20 @@ export const officers = [
       "Supports the mandir through service coordination, outreach, and religious education.",
   },
   {
+    id: "shiva-maharaj",
+    name: "Pandit Shiva Maharaj",
+    role: "Cultural Officer",
+    photo: "/images/officers/shiva-d-maharaj.jpg",
+    description:
+      "Supports cultural programs, devotional arts, and temple presentation with a steady public voice.",
+  },
+  {
+    id: "shriram-maharaj",
     name: "Pandit Shriram Maharaj",
     role: "Community Officer",
     photo: "/images/officers/shriram-maharaj.jpg",
     description:
       "Helps devotees with sacred observances, care, and event coordination.",
-  },
-  {
-    name: "Pandit Shiva D. Maharaj",
-    role: "Cultural Officer",
-    photo: "/images/officers/shiva-d-maharaj.jpg",
-    description:
-      "Supports cultural programs, devotional arts, and temple presentation with a steady public voice.",
   },
 ];
 

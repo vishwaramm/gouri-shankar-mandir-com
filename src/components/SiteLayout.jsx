@@ -179,6 +179,16 @@ function SiteLayout() {
                   {item.label}
                 </NavLink>
               ))}
+
+              {onAdminRoute || adminState.authenticated || accountState.user ? null : (
+                <NavLink
+                  to="/sign-up"
+                  onClick={() => setMobileNavOpen(false)}
+                  className="site-link site-link-cta site-link-cta-mobile"
+                >
+                  Sign Up
+                </NavLink>
+              )}
             </div>
 
             <div className="site-auth-controls">
@@ -211,6 +221,13 @@ function SiteLayout() {
                           className="site-account-link"
                         >
                           Dashboard
+                        </NavLink>
+                        <NavLink
+                          to="/priest-profile"
+                          onClick={() => setAdminMenuOpen(false)}
+                          className="site-account-link"
+                        >
+                          Edit profile
                         </NavLink>
                         <NavLink
                           to="/priest-payment-request"
@@ -355,15 +372,6 @@ function SiteLayout() {
                 <div className="d-flex flex-column gap-2">
                   <NavLink to="/admin" className="btn btn-primary rounded-pill px-4">
                     Open admin login
-                  </NavLink>
-                  <NavLink to="/priest-tools" className="btn btn-outline-secondary rounded-pill px-4">
-                    Open admin tools
-                  </NavLink>
-                  <NavLink to="/priest-payment-request" className="btn btn-outline-secondary rounded-pill px-4">
-                    Open payment request
-                  </NavLink>
-                  <NavLink to="/priest-custom-payment" className="btn btn-outline-secondary rounded-pill px-4">
-                    Open custom payment
                   </NavLink>
                 </div>
               </div>

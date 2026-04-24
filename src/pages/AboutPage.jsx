@@ -1,6 +1,42 @@
-import { historyMilestones, missionPillars, officers } from '../content.js'
+import { useEffect, useMemo, useState } from 'react'
+import { historyMilestones, missionPillars, officers as officerProfiles } from '../content.js'
+import { loadOfficers } from '../lib/siteApi.js'
 
 function AboutPage() {
+  const [dbOfficers, setDbOfficers] = useState([])
+
+  useEffect(() => {
+    let active = true
+
+    loadOfficers()
+      .then((data) => {
+        if (!active) return
+        setDbOfficers(Array.isArray(data.officers) ? data.officers : [])
+      })
+      .catch(() => {
+        if (!active) return
+        setDbOfficers([])
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const officers = useMemo(() => {
+    const liveById = new Map(dbOfficers.map((officer) => [officer.id, officer]))
+
+    return officerProfiles.map((profile) => {
+      const live = liveById.get(profile.id)
+      return {
+        ...profile,
+        name: live?.name || profile.name,
+        role: live?.role || profile.role,
+        photo: live?.photoUrl || profile.photo,
+      }
+    })
+  }, [dbOfficers])
+
   return (
     <main>
       <section
@@ -100,7 +136,7 @@ function AboutPage() {
                 <h2 className="section-title mb-4">Temple leadership.</h2>
                 <div className="profile-grid">
                   {officers.map((officer, index) => (
-                    <article className="profile-panel reveal" key={officer.name} style={{ animationDelay: `${index * 90}ms` }}>
+                    <article className="profile-panel reveal" key={officer.id} style={{ animationDelay: `${index * 90}ms` }}>
                       <div className="profile-media">
                         <img src={officer.photo} alt={`Portrait for ${officer.name}`} />
                       </div>

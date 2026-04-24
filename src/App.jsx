@@ -9,10 +9,11 @@ import OrderDetailsPage from './pages/OrderDetailsPage.jsx'
 import SignUpPage from './pages/SignUpPage.jsx'
 import AccountVerifyEmailPage from './pages/AccountVerifyEmailPage.jsx'
 import AccountResetPasswordPage from './pages/AccountResetPasswordPage.jsx'
-import EducationPage from './pages/EducationPage.jsx'
+import BlogPage from './pages/BlogPage.jsx'
 import HomePage from './pages/HomePage.jsx'
 import PaymentsPage from './pages/PaymentsPage.jsx'
 import PriestCustomPaymentPage from './pages/PriestCustomPaymentPage.jsx'
+import PriestProfilePage from './pages/PriestProfilePage.jsx'
 import PriestPaymentRequestPage from './pages/PriestPaymentRequestPage.jsx'
 import PriestReviewPage from './pages/PriestReviewPage.jsx'
 import PriestToolsPage from './pages/PriestToolsPage.jsx'
@@ -27,8 +28,10 @@ function App() {
         <Route index element={<HomePage />} />
         <Route path="about" element={<AboutPage />} />
         <Route path="services" element={<ServicesPage />} />
-        <Route path="education" element={<EducationPage />} />
+        <Route path="education" element={<Navigate to="/blog" replace />} />
         <Route path="community" element={<CommunityPage />} />
+        <Route path="blog" element={<BlogPage />} />
+        <Route path="blog/:postId" element={<BlogPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="contact" element={<ContactPage />} />
         <Route path="account" element={<AccountPage />} />
@@ -44,6 +47,7 @@ function App() {
         <Route path="admin" element={<Navigate to="/priest-review" replace />} />
         <Route path="priest-review" element={<PriestReviewPage />} />
         <Route path="priest-tools" element={<PriestToolsPage />} />
+        <Route path="priest-profile" element={<PriestProfilePage />} />
         <Route path="priest-payment-request" element={<PriestPaymentRequestPage />} />
         <Route path="priest-custom-payment" element={<PriestCustomPaymentPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

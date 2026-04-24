@@ -28,6 +28,16 @@ const ROUTE_SEO = {
     description:
       'Join satsang, observe festivals, and stay connected through community gatherings and membership paths.',
   },
+  '/blog': {
+    title: `Blog | ${SITE_NAME}`,
+    description:
+      'Follow temple announcements, study notes, and officer updates in one feed.',
+  },
+  '/blog/:postId': {
+    title: `Blog Post | ${SITE_NAME}`,
+    description:
+      'Read a temple update from the officers with embedded media when available.',
+  },
   '/resources': {
     title: `Resources | Prayers, Festival Dates, and Teaching Materials`,
     description:
@@ -108,6 +118,11 @@ const ROUTE_SEO = {
     description: 'Sign in with a manually provisioned admin account before opening the private tools page.',
     robots: 'noindex, nofollow',
   },
+  '/priest-profile': {
+    title: `Edit Profile | ${SITE_NAME}`,
+    description: 'Update the photo attached to your admin account.',
+    robots: 'noindex, nofollow',
+  },
   '/priest-tools': {
     title: `Dashboard | ${SITE_NAME}`,
     description: 'Review requests and open payment request or custom payment pages after admin sign in.',
@@ -128,6 +143,7 @@ const ROUTE_SEO = {
 function resolveSeoKey(pathname) {
   if (pathname.startsWith('/order/')) return '/order/:orderCode'
   if (pathname.startsWith('/orders/')) return '/orders/:orderCode'
+  if (pathname.startsWith('/blog/') && pathname !== '/blog/') return '/blog/:postId'
   return pathname
 }
 

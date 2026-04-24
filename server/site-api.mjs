@@ -1,10 +1,63 @@
 import nodemailer from 'nodemailer'
 import { MongoClient } from 'mongodb'
+import Busboy from 'busboy'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { createHmac, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { dirname, extname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const APP_ROOT = resolve(__dirname, '..')
+const UPLOADS_DIR = resolve(APP_ROOT, 'uploads')
+const ADMIN_PHOTO_DIR = resolve(UPLOADS_DIR, 'admin-photos')
+const ADMIN_PHOTO_ROUTE_PREFIX = '/uploads/admin-photos/'
+const PERSISTENCE_STATE_DIR = resolve(APP_ROOT, 'persistent-state')
+const MONGO_PERSISTENCE_LOCK_FILE = resolve(PERSISTENCE_STATE_DIR, 'mongo-lock.json')
+const MONGO_PERSISTENCE_LOCK_KEY = 'mongoPersistenceLock'
 
 const PRIMARY_ADMIN_EMAIL = 'vishwaramm@gmail.com'
 const LEGACY_ADMIN_EMAIL = 'drgsm@hotmail.com'
 const RECIPIENT_EMAIL = PRIMARY_ADMIN_EMAIL
+
+const BLOG_AUTHOR_ROSTER = [
+  {
+    id: 'gouri-maharaj',
+    name: 'Dr. Pandit Gouri Maharaj',
+    role: 'Spiritual Guide',
+    email: 'drgsm@hotmail.com',
+    defaultPassword: 'sH4!gR-7qV2#L9p',
+    photo: '/images/officers/gouri-maharaj.png',
+  },
+  {
+    id: 'vishwaram-maharaj',
+    name: 'Pandit Vishwaram Maharaj',
+    role: 'Temple Director',
+    email: 'vishwaramm@gmail.com',
+    defaultPassword: 'vM9!dK-2rS8#xF4',
+    photo: '/images/officers/vishwaram-maharaj.jpg',
+  },
+  {
+    id: 'shiva-maharaj',
+    name: 'Pandit Shiva Maharaj',
+    role: 'Cultural Officer',
+    email: 'shiv.maharaj@gmail.com',
+    defaultPassword: 'xP6!nC-5uT3#jQ7',
+    photo: '/images/officers/shiva-d-maharaj.jpg',
+  },
+  {
+    id: 'shriram-maharaj',
+    name: 'Pandit Shriram Maharaj',
+    role: 'Community Officer',
+    email: 'shriramkmaharaj@gmail.com',
+    defaultPassword: 'kR8!mZ-1hN6#tB5',
+    photo: '/images/officers/shriram-maharaj.jpg',
+  },
+]
+
+const BLOG_AUTHOR_ALIASES = {
+  'shiva-d-maharaj': 'shiva-maharaj',
+  'krisen-maharaj': 'shriram-maharaj',
+}
 
 let mongoClient
 let mongoDbPromise
@@ -20,6 +73,8 @@ const memoryStore = {
   paymentLinks: [],
   rsvps: [],
   contactMessages: [],
+  blogPosts: [],
+  blogPostLikes: [],
   squareWebhookEvents: [],
   adminAccessRequests: [],
   adminUsers: [],
@@ -131,21 +186,30 @@ async function getDb(env) {
           db.collection('orderEvents').createIndex({ orderCode: 1 }),
           db.collection('orderEvents').createIndex({ eventType: 1 }),
           db.collection('orderEvents').createIndex({ createdAt: -1 }),
+          db.collection('settings').createIndex({ key: 1 }, { unique: true }),
           db.collection('paymentLinks').createIndex({ tokenHash: 1 }, { unique: true }),
           db.collection('paymentLinks').createIndex({ createdAt: -1 }),
           db.collection('paymentLinks').createIndex({ expiresAt: 1 }),
           db.collection('rsvps').createIndex({ createdAt: -1 }),
           db.collection('contactMessages').createIndex({ createdAt: -1 }),
+          db.collection('blogPosts').createIndex({ publishedAt: -1 }),
+          db.collection('blogPosts').createIndex({ createdAt: -1 }),
+          db.collection('blogPostLikes').createIndex({ postId: 1, ipHash: 1 }, { unique: true }),
+          db.collection('blogPostLikes').createIndex({ createdAt: -1 }),
           db.collection('squareWebhookEvents').createIndex({ eventId: 1 }, { unique: true }),
           db.collection('adminAccessRequests').createIndex({ tokenHash: 1 }, { unique: true, sparse: true }),
           db.collection('adminAccessRequests').createIndex({ email: 1 }),
           db.collection('adminAccessRequests').createIndex({ status: 1 }),
           db.collection('adminAccessRequests').createIndex({ expiresAt: 1 }),
           db.collection('adminUsers').createIndex({ email: 1 }, { unique: true }),
+          db.collection('adminUsers').createIndex({ officerId: 1 }, { unique: true, sparse: true }),
           db.collection('adminSessions').createIndex({ sessionId: 1 }, { unique: true }),
           db.collection('adminSessions').createIndex({ adminUserId: 1 }),
           db.collection('adminSessions').createIndex({ expiresAt: 1 }),
         ])
+
+        await enforceMongoPersistenceLock(db, env)
+        await ensureDefaultOfficerAdmins(db)
 
         return db
       })
@@ -293,6 +357,28 @@ function getAdminAccessRequestsCollection(db) {
   return db.collection('adminAccessRequests')
 }
 
+function getBlogPostsCollection(db) {
+  return db.collection('blogPosts')
+}
+
+function getBlogPostLikesCollection(db) {
+  return db.collection('blogPostLikes')
+}
+
+async function readJsonFile(filePath) {
+  try {
+    const contents = await readFile(filePath, 'utf8')
+    return JSON.parse(contents)
+  } catch {
+    return null
+  }
+}
+
+async function writeJsonFile(filePath, data) {
+  await mkdir(dirname(filePath), { recursive: true })
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
+}
+
 function hashSecret(value) {
   return createHash('sha256').update(String(value)).digest('hex')
 }
@@ -337,6 +423,522 @@ function generateOrderCode() {
   }
 
   return code
+}
+
+function getBlogAuthorById(authorId) {
+  const normalizedId = normalizeOfficerId(authorId)
+  return BLOG_AUTHOR_ROSTER.find((author) => author.id === normalizedId) || null
+}
+
+function normalizeOfficerId(officerId) {
+  const normalized = typeof officerId === 'string' ? officerId.trim() : ''
+  if (!normalized) return ''
+  return BLOG_AUTHOR_ALIASES[normalized] || normalized
+}
+
+function isSafeBlogLink(url) {
+  try {
+    const parsed = new URL(url, 'https://gourishankarmandir.com')
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    const host = parsed.hostname.trim().toLowerCase()
+    if (!host) return false
+    if (host === 'localhost' || host.endsWith('.localhost')) return false
+    if (/^127\./.test(host) || /^0\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) return false
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isSafeBlogImageSrc(url) {
+  try {
+    const parsed = new URL(url, 'https://gourishankarmandir.com')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function isSafeBlogIframeSrc(url) {
+  try {
+    const parsed = new URL(url, 'https://gourishankarmandir.com')
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase()
+    return (
+      (host === 'youtube.com' && parsed.pathname.startsWith('/embed/')) ||
+      (host === 'youtube-nocookie.com' && parsed.pathname.startsWith('/embed/')) ||
+      (host === 'facebook.com' && parsed.pathname.startsWith('/plugins/')) ||
+      host === 'fb.watch'
+    )
+  } catch {
+    return false
+  }
+}
+
+function normalizePreviewText(value = '') {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .trim()
+    .slice(0, 240)
+}
+
+function extractMetaTag(html, key, attr = 'property') {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const escapedAttr = attr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const patterns = [
+    new RegExp(`<meta[^>]+${escapedAttr}\\s*=\\s*["']${escapedKey}["'][^>]+content\\s*=\\s*["']([^"']*)["'][^>]*>`, 'i'),
+    new RegExp(`<meta[^>]+content\\s*=\\s*["']([^"']*)["'][^>]+${escapedAttr}\\s*=\\s*["']${escapedKey}["'][^>]*>`, 'i'),
+  ]
+
+  for (const pattern of patterns) {
+    const match = String(html || '').match(pattern)
+    if (match?.[1]) return normalizePreviewText(match[1])
+  }
+
+  return ''
+}
+
+function extractLinkPreviewFromHtml(html, url) {
+  const title =
+    extractMetaTag(html, 'og:title') ||
+    extractMetaTag(html, 'twitter:title', 'name') ||
+    normalizePreviewText(String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '')
+  const description =
+    extractMetaTag(html, 'og:description') ||
+    extractMetaTag(html, 'twitter:description', 'name') ||
+    ''
+  const image =
+    extractMetaTag(html, 'og:image') ||
+    extractMetaTag(html, 'twitter:image', 'name') ||
+    ''
+  const siteName = extractMetaTag(html, 'og:site_name') || new URL(url).hostname.replace(/^www\./i, '')
+
+  return {
+    title: title || siteName || new URL(url).hostname,
+    description,
+    image,
+    siteName,
+    url,
+  }
+}
+
+async function fetchLinkPreview(url) {
+  if (!isSafeBlogLink(url)) {
+    return null
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 6000)
+
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'GourishankarMandirBot/1.0',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    })
+
+    if (!response.ok) return null
+
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.toLowerCase().includes('text/html')) return null
+
+    const html = await response.text()
+    return extractLinkPreviewFromHtml(html, response.url || url)
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function normalizeProfilePhotoUrl(value = '') {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) return trimmed
+  return ''
+}
+
+function normalizeAdminTitle(value = '') {
+  return String(value || '').trim().slice(0, 80)
+}
+
+function isManagedAdminPhotoUrl(value = '') {
+  return String(value || '').startsWith(ADMIN_PHOTO_ROUTE_PREFIX)
+}
+
+function getAdminPhotoFileName(photoUrl = '') {
+  const trimmed = String(photoUrl || '').trim()
+  if (!isManagedAdminPhotoUrl(trimmed)) return ''
+  return trimmed.slice(ADMIN_PHOTO_ROUTE_PREFIX.length)
+}
+
+function getAdminPhotoFilePath(photoUrl = '') {
+  const fileName = getAdminPhotoFileName(photoUrl)
+  if (!fileName) return ''
+  return resolve(ADMIN_PHOTO_DIR, fileName)
+}
+
+function getAdminPhotoExtension(mimeType = '', originalName = '') {
+  const normalizedMime = String(mimeType || '').toLowerCase()
+  const ext = extname(String(originalName || '').toLowerCase())
+  const allowedByMime = {
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+  }
+
+  if (allowedByMime[normalizedMime]) return allowedByMime[normalizedMime]
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) return ext === '.jpeg' ? '.jpg' : ext
+  return ''
+}
+
+async function deleteManagedAdminPhoto(photoUrl = '') {
+  const filePath = getAdminPhotoFilePath(photoUrl)
+  if (!filePath) return
+
+  try {
+    await unlink(filePath)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error
+    }
+  }
+}
+
+async function ensureAdminPhotoDir() {
+  await mkdir(ADMIN_PHOTO_DIR, { recursive: true })
+}
+
+function parseMultipartRequest(request, { maxFileSize = 5 * 1024 * 1024 } = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const fields = {}
+    let fileEntry = null
+    let rejected = false
+
+    const busboy = Busboy({
+      headers: request.headers,
+      limits: {
+        files: 1,
+        fileSize: maxFileSize,
+      },
+    })
+
+    busboy.on('field', (name, value) => {
+      fields[name] = value
+    })
+
+    busboy.on('file', (name, fileStream, info) => {
+      const chunks = []
+      let fileSize = 0
+
+      fileStream.on('data', (chunk) => {
+        fileSize += chunk.length
+        chunks.push(chunk)
+      })
+
+      fileStream.on('limit', () => {
+        rejected = true
+        reject(new Error('Profile photos must be 5 MB or smaller.'))
+      })
+
+      fileStream.on('error', reject)
+
+      fileStream.on('end', () => {
+        if (rejected) return
+        if (name !== 'photo') return
+
+        fileEntry = {
+          fieldName: name,
+          filename: info?.filename || '',
+          mimeType: info?.mimeType || '',
+          buffer: Buffer.concat(chunks, fileSize),
+        }
+      })
+    })
+
+    busboy.on('error', reject)
+    busboy.on('finish', () => {
+      if (rejected) return
+      resolvePromise({ fields, file: fileEntry })
+    })
+
+    request.pipe(busboy)
+  })
+}
+
+function stripBlogHtml(input = '') {
+  return String(input)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|blockquote|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n\s+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
+function sanitizeBlogHtml(input = '') {
+  let html = String(input || '').trim()
+  if (!html) return ''
+
+  html = html.replace(/<!--[\s\S]*?-->/g, '')
+  html = html.replace(/<\/?(script|style|object|embed|form|input|button|textarea|select|option|svg|math)[^>]*>/gi, '')
+  html = html.replace(/\son[a-z-]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  html = html.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  html = html.replace(/<\/?([a-z0-9-]+)([^>]*)>/gi, (full, tag, attrs = '') => {
+    const lower = String(tag || '').toLowerCase()
+
+    if (lower === 'a') {
+      if (full.startsWith('</')) return '</a>'
+      const hrefMatch = String(attrs).match(/\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i)
+      const href = hrefMatch?.[2] || hrefMatch?.[3] || hrefMatch?.[4] || ''
+      if (!href || !isSafeBlogLink(href)) return ''
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">`
+    }
+
+    if (lower === 'img') {
+      if (full.startsWith('</')) return ''
+      const srcMatch = String(attrs).match(/\bsrc\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i)
+      const altMatch = String(attrs).match(/\balt\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i)
+      const src = srcMatch?.[2] || srcMatch?.[3] || srcMatch?.[4] || ''
+      const alt = escapeHtml(altMatch?.[2] || altMatch?.[3] || altMatch?.[4] || '')
+      if (!src || !isSafeBlogImageSrc(src)) return ''
+      return `<img src="${escapeHtml(src)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer" />`
+    }
+
+    if (lower === 'iframe') {
+      if (full.startsWith('</')) return '</iframe>'
+      const srcMatch = String(attrs).match(/\bsrc\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i)
+      const src = srcMatch?.[2] || srcMatch?.[3] || srcMatch?.[4] || ''
+      if (!src || !isSafeBlogIframeSrc(src)) return ''
+      return `<iframe src="${escapeHtml(src)}" title="Embedded media" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share" allowfullscreen>`
+    }
+
+    const allowed = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+    if (!allowed.has(lower)) return ''
+
+    if (lower === 'br') return '<br />'
+    return full.startsWith('</') ? `</${lower}>` : `<${lower}>`
+  })
+
+  return html
+}
+
+function serializeBlogPost(post) {
+  if (!post) return null
+  const author = post.authorType === 'admin' || post.authorName || post.authorPhotoUrl || post.authorTitle
+    ? {
+        id: post.authorId || '',
+        name: post.authorName || '',
+        title: post.authorTitle || '',
+        photoUrl: post.authorPhotoUrl || '',
+        role: post.authorRole || 'Admin',
+        isSuperAdmin: Boolean(post.authorOfficerId),
+      }
+    : null
+  const officer = author ? null : getBlogAuthorById(post.authorId)
+  const bodyHtml = post.bodyHtml
+    ? sanitizeBlogHtml(post.bodyHtml)
+    : post.body
+      ? `<p>${escapeHtml(post.body).replaceAll('\n', '<br />')}</p>`
+      : ''
+  return {
+    id: post.id || '',
+    authorId: post.authorId || '',
+    authorType: post.authorType || (author ? 'admin' : officer ? 'officer' : ''),
+    author: author
+      ? {
+          id: author.id,
+          name: author.name,
+          title: author.title,
+          role: author.role,
+          photoUrl: author.photoUrl,
+          isSuperAdmin: Boolean(author.isSuperAdmin),
+        }
+      : officer
+        ? {
+            id: officer.id,
+            name: officer.name,
+            title: officer.role,
+            role: officer.role,
+            photoUrl: officer.photo,
+            isSuperAdmin: true,
+          }
+        : null,
+    title: post.title || '',
+    body: stripBlogHtml(bodyHtml || post.body || ''),
+    bodyHtml,
+    mediaUrl: post.mediaUrl || '',
+    mediaCaption: post.mediaCaption || '',
+    approvalStatus: post.approvalStatus || 'approved',
+    approvalCount: Number(post.approvalCount || 0),
+    approvedAt: post.approvedAt || '',
+    approvedBy: post.approvedBy
+      ? {
+          id: post.approvedBy.id || '',
+          name: post.approvedBy.name || '',
+          title: post.approvedBy.title || '',
+          photoUrl: post.approvedBy.photoUrl || '',
+        }
+      : null,
+    likes: Number(post.likes || 0),
+    publishedAt: post.publishedAt || post.createdAt || '',
+    createdAt: post.createdAt || '',
+    updatedAt: post.updatedAt || '',
+  }
+}
+
+function isApprovedBlogPost(post) {
+  return String(post?.approvalStatus || 'approved') === 'approved'
+}
+
+function hasBlogMediaContent(html = '') {
+  return /<(img|iframe)\b/i.test(String(html || ''))
+}
+
+async function listBlogPosts(db, limit = 20) {
+  if (db) {
+    return getBlogPostsCollection(db)
+      .find({ approvalStatus: { $ne: 'pending' } })
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray()
+  }
+
+  return [...memoryStore.blogPosts]
+    .filter((item) => isApprovedBlogPost(item))
+    .sort((left, right) => String(right.publishedAt || right.createdAt || '').localeCompare(String(left.publishedAt || left.createdAt || '')))
+    .slice(0, limit)
+}
+
+async function listAllBlogPosts(db, limit = 20) {
+  if (db) {
+    return getBlogPostsCollection(db)
+      .find({})
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray()
+  }
+
+  return [...memoryStore.blogPosts]
+    .sort((left, right) => String(right.publishedAt || right.createdAt || '').localeCompare(String(left.publishedAt || left.createdAt || '')))
+    .slice(0, limit)
+}
+
+async function saveBlogPost(db, entry) {
+  if (db) {
+    await getBlogPostsCollection(db).insertOne(entry)
+  } else {
+    memoryStore.blogPosts.unshift(entry)
+  }
+}
+
+async function findBlogPostById(db, postId) {
+  const normalizedPostId = typeof postId === 'string' ? postId.trim() : ''
+  if (!normalizedPostId) return null
+
+  if (db) {
+    return getBlogPostsCollection(db).findOne({ id: normalizedPostId })
+  }
+
+  return memoryStore.blogPosts.find((item) => item.id === normalizedPostId) || null
+}
+
+async function deleteBlogPostById(db, postId) {
+  const normalizedPostId = typeof postId === 'string' ? postId.trim() : ''
+  if (!normalizedPostId) return false
+
+  if (db) {
+    const result = await getBlogPostsCollection(db).deleteOne({ id: normalizedPostId })
+    return Boolean(result.deletedCount)
+  }
+
+  const before = memoryStore.blogPosts.length
+  memoryStore.blogPosts = memoryStore.blogPosts.filter((item) => item.id !== normalizedPostId)
+  return memoryStore.blogPosts.length !== before
+}
+
+async function recordBlogPostLike(db, request, env, postId) {
+  const normalizedPostId = typeof postId === 'string' ? postId.trim() : ''
+  if (!normalizedPostId) {
+    return { ok: false, code: 'invalid_post', message: 'Post id is required.' }
+  }
+
+  const ipHash = getBlogLikeIpHash(request, env)
+  if (!ipHash) {
+    return { ok: false, code: 'invalid_ip', message: 'Unable to identify this request.' }
+  }
+
+  const likeEntry = {
+    id: randomUUID(),
+    postId: normalizedPostId,
+    ipHash,
+    createdAt: new Date().toISOString(),
+  }
+
+  if (db) {
+    try {
+      await getBlogPostLikesCollection(db).insertOne(likeEntry)
+    } catch (error) {
+      if (error?.code === 11000) {
+        const current = await findBlogPostById(db, normalizedPostId)
+        if (!current) {
+          return { ok: false, code: 'not_found', message: 'Post not found.' }
+        }
+        return { ok: true, alreadyLiked: true, post: current }
+      }
+      throw error
+    }
+
+    const result = await getBlogPostsCollection(db).findOneAndUpdate(
+      { id: normalizedPostId },
+      {
+        $inc: { likes: 1 },
+        $set: { updatedAt: likeEntry.createdAt },
+      },
+      { returnDocument: 'after' },
+    )
+
+    if (!result?.value) {
+      await getBlogPostLikesCollection(db).deleteOne({ postId: normalizedPostId, ipHash })
+      return { ok: false, code: 'not_found', message: 'Post not found.' }
+    }
+
+    return { ok: true, alreadyLiked: false, post: result.value }
+  }
+
+  const existingLike = memoryStore.blogPostLikes.some(
+    (item) => item.postId === normalizedPostId && item.ipHash === ipHash,
+  )
+  if (existingLike) {
+    const current = await findBlogPostById(db, normalizedPostId)
+    if (!current) {
+      return { ok: false, code: 'not_found', message: 'Post not found.' }
+    }
+    return { ok: true, alreadyLiked: true, post: current }
+  }
+
+  const postIndex = memoryStore.blogPosts.findIndex((item) => item.id === normalizedPostId)
+  if (postIndex === -1) {
+    return { ok: false, code: 'not_found', message: 'Post not found.' }
+  }
+
+  memoryStore.blogPostLikes.unshift(likeEntry)
+  const entry = memoryStore.blogPosts[postIndex]
+  const updated = {
+    ...entry,
+    likes: Number(entry.likes || 0) + 1,
+    updatedAt: likeEntry.createdAt,
+  }
+  memoryStore.blogPosts[postIndex] = updated
+  return { ok: true, alreadyLiked: false, post: updated }
 }
 
 function parseCookies(request) {
@@ -389,6 +991,40 @@ function getRequestOrigin(request, env) {
   return `${getRequestProtocol(request, env)}://${String(host).trim().replace(/\/$/, '')}`
 }
 
+function getRequestClientIp(request) {
+  const forwardedFor = request.headers['x-forwarded-for']
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    const forwardedIp = forwardedFor.split(',')[0].trim()
+    if (forwardedIp) return forwardedIp
+  }
+
+  const realIp = request.headers['x-real-ip']
+  if (typeof realIp === 'string' && realIp.trim()) {
+    return realIp.trim()
+  }
+
+  const remoteAddress = request.socket?.remoteAddress || request.connection?.remoteAddress || ''
+  return String(remoteAddress || '').trim()
+}
+
+function getBlogLikeSecret(env) {
+  return (
+    env.BLOG_LIKE_IP_SECRET?.trim() ||
+    env.BLOG_LIKE_SECRET?.trim() ||
+    env.MANDIR_WEBHOOK_SECRET?.trim() ||
+    env.SITE_SECRET?.trim() ||
+    env.ADMIN_SESSION_SECRET?.trim() ||
+    'blog-like-ip-secret'
+  )
+}
+
+function getBlogLikeIpHash(request, env) {
+  const ip = getRequestClientIp(request)
+  if (!ip) return ''
+
+  return createHmac('sha256', getBlogLikeSecret(env)).update(ip).digest('hex')
+}
+
 function getConfiguredOrigin(env) {
   const configured = env.SITE_URL?.trim() || env.PUBLIC_SITE_URL?.trim() || env.VITE_SITE_URL?.trim()
   return configured ? configured.replace(/\/$/, '') : ''
@@ -403,6 +1039,41 @@ function isStrictPersistenceEnabled(env) {
 
   if (['1', 'true', 'yes', 'on'].includes(flag)) return true
   return String(env.NODE_ENV || '').trim().toLowerCase() === 'production'
+}
+
+function getMongoPersistenceLockFile(env) {
+  return env.MONGO_PERSISTENCE_LOCK_FILE?.trim() || MONGO_PERSISTENCE_LOCK_FILE
+}
+
+async function enforceMongoPersistenceLock(db, env) {
+  if (!db || !isStrictPersistenceEnabled(env)) return
+
+  const lockFile = getMongoPersistenceLockFile(env)
+  const existingLock = await getSettingsCollection(db).findOne({ key: MONGO_PERSISTENCE_LOCK_KEY })
+  const fileLock = await readJsonFile(lockFile)
+
+  if (existingLock?.token && fileLock?.token) {
+    if (existingLock.token !== fileLock.token) {
+      throw new Error('Mongo persistence lock mismatch. Refusing to start against a replaced database.')
+    }
+    return
+  }
+
+  if (existingLock?.token && !fileLock?.token) {
+    await writeJsonFile(lockFile, existingLock)
+    return
+  }
+
+  if (!existingLock?.token && fileLock?.token) {
+    throw new Error('Mongo persistence lock is missing from the database. Refusing to start to avoid replacing existing data.')
+  }
+
+  const token = randomBytes(32).toString('hex')
+  const now = new Date().toISOString()
+  const record = { key: MONGO_PERSISTENCE_LOCK_KEY, token, createdAt: now, updatedAt: now }
+
+  await getSettingsCollection(db).insertOne(record)
+  await writeJsonFile(lockFile, record)
 }
 
 function getPublicRuntimeConfig(env) {
@@ -484,14 +1155,30 @@ async function getPriestSession(db, sessionId) {
 
 function serializeAdminUser(adminUser) {
   if (!adminUser) return null
+  const officer = getBlogAuthorById(adminUser.officerId)
+  const photoUrl = normalizeProfilePhotoUrl(adminUser.photoUrl || officer?.photo || '')
+  const title = normalizeAdminTitle(adminUser.title || officer?.role || '')
   return {
     id: adminUser.id || '',
     name: adminUser.name || '',
     email: adminUser.email || '',
     role: adminUser.role || 'staff',
+    title,
+    photoUrl,
+    isSuperAdmin: Boolean(adminUser.officerId),
     createdAt: adminUser.createdAt || '',
     updatedAt: adminUser.updatedAt || '',
     lastLoginAt: adminUser.lastLoginAt || '',
+    officerId: adminUser.officerId || '',
+    officerAssignedAt: adminUser.officerAssignedAt || '',
+    officer: officer
+      ? {
+          id: officer.id,
+          name: officer.name,
+          role: officer.role,
+          photo: officer.photo,
+        }
+      : null,
   }
 }
 
@@ -503,6 +1190,8 @@ function getAdminPermissions(adminUser) {
   const role = getAdminRole(adminUser)
   return {
     role,
+    isSuperAdmin: Boolean(adminUser?.officerId),
+    canAssignAdminTitles: Boolean(adminUser?.officerId),
     canViewAdminAccessRequests: role === 'owner',
     canViewSquareSync: role === 'owner',
     canResetSiteData: role === 'owner',
@@ -530,9 +1219,139 @@ async function getAdminUserById(db, adminUserId) {
   return memoryStore.adminUsers.find((item) => item.id === adminUserId) || null
 }
 
+async function getAdminUserByOfficerId(db, officerId) {
+  const normalizedOfficerId = normalizeOfficerId(officerId)
+  if (!normalizedOfficerId) return null
+
+  if (db) {
+    return getAdminUsersCollection(db).findOne({ officerId: normalizedOfficerId })
+  }
+
+  return memoryStore.adminUsers.find((item) => item.officerId === normalizedOfficerId) || null
+}
+
+async function ensureDefaultOfficerAdmins(db) {
+  const now = new Date().toISOString()
+
+  for (const officer of BLOG_AUTHOR_ROSTER) {
+    const normalizedEmail = normalizeEmail(officer.email)
+    const normalizedOfficerId = normalizeOfficerId(officer.id)
+    const existing = db
+      ? (await getAdminUsersCollection(db).findOne({
+          $or: [{ officerId: normalizedOfficerId }, { email: normalizedEmail }],
+        }))
+      : memoryStore.adminUsers.find((item) => {
+          const itemOfficerId = normalizeOfficerId(item.officerId)
+          return itemOfficerId === normalizedOfficerId || item.email === normalizedEmail
+        }) || null
+
+    const nextRecord = {
+      id: existing?.id || randomUUID(),
+      name: existing?.name || officer.name,
+      email: normalizeEmail(existing?.email || normalizedEmail),
+      passwordHash: existing?.credentialsUpdatedAt
+        ? existing.passwordHash
+        : hashPassword(officer.defaultPassword),
+      role: existing?.role || 'staff',
+      title: normalizeAdminTitle(existing?.title || officer.role || ''),
+      photoUrl: normalizeProfilePhotoUrl(existing?.photoUrl || officer.photo || ''),
+      officerId: normalizedOfficerId,
+      officerAssignedAt: existing?.officerAssignedAt || now,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      lastLoginAt: existing?.lastLoginAt || '',
+      credentialsUpdatedAt: existing?.credentialsUpdatedAt || '',
+    }
+
+    if (existing) {
+      const needsMigration =
+        normalizeOfficerId(existing.officerId || '') !== normalizedOfficerId ||
+        existing.name !== nextRecord.name ||
+        normalizeEmail(existing.email || '') !== nextRecord.email ||
+        existing.photoUrl !== nextRecord.photoUrl ||
+        normalizeAdminTitle(existing.title || '') !== nextRecord.title
+
+      if (needsMigration) {
+        if (db) {
+          await getAdminUsersCollection(db).updateOne(
+            { id: existing.id },
+            {
+              $set: {
+                name: nextRecord.name,
+                email: nextRecord.email,
+                title: nextRecord.title,
+                photoUrl: nextRecord.photoUrl,
+                officerId: nextRecord.officerId,
+                officerAssignedAt: nextRecord.officerAssignedAt,
+                updatedAt: nextRecord.updatedAt,
+                credentialsUpdatedAt: nextRecord.credentialsUpdatedAt,
+              },
+            },
+          )
+        } else {
+          const index = memoryStore.adminUsers.findIndex((item) => item.id === existing.id)
+          if (index >= 0) {
+            memoryStore.adminUsers[index] = {
+              ...memoryStore.adminUsers[index],
+              ...nextRecord,
+              passwordHash: memoryStore.adminUsers[index].passwordHash || nextRecord.passwordHash,
+            }
+          }
+        }
+      }
+      continue
+    }
+
+    if (db) {
+      await getAdminUsersCollection(db).insertOne(nextRecord)
+    } else {
+      memoryStore.adminUsers.unshift(nextRecord)
+    }
+  }
+}
+
+async function listPublicOfficerProfiles(db) {
+  const roster = BLOG_AUTHOR_ROSTER.map((officer) => normalizeOfficerId(officer.id))
+
+  if (db) {
+    const records = await getAdminUsersCollection(db)
+      .find({ officerId: { $in: roster } })
+      .toArray()
+    const byId = new Map(
+      records.map((item) => [normalizeOfficerId(item.officerId || ''), item]),
+    )
+
+    return BLOG_AUTHOR_ROSTER.map((officer) => {
+      const record = byId.get(normalizeOfficerId(officer.id))
+      return {
+        id: officer.id,
+        name: record?.name || officer.name,
+        role: record?.title || officer.role,
+        photoUrl: normalizeProfilePhotoUrl(record?.photoUrl || officer.photo || ''),
+      }
+    })
+  }
+
+  const byId = new Map(
+    memoryStore.adminUsers.map((item) => [normalizeOfficerId(item.officerId || ''), item]),
+  )
+
+  return BLOG_AUTHOR_ROSTER.map((officer) => {
+    const record = byId.get(normalizeOfficerId(officer.id))
+    return {
+      id: officer.id,
+      name: record?.name || officer.name,
+      role: record?.title || officer.role,
+      photoUrl: normalizeProfilePhotoUrl(record?.photoUrl || officer.photo || ''),
+    }
+  })
+}
+
 async function createAdminUserSession(db, adminUserId) {
   return createPriestAdminSession(db, adminUserId)
 }
+
+void ensureDefaultOfficerAdmins(null)
 
 async function getUserByEmail(db, email) {
   const normalizedEmail = normalizeEmail(email)
@@ -1947,24 +2766,28 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const currentAdmin = await getAuthenticatedPriestUser(db, request)
     const adminPermissions = getAdminPermissions(currentAdmin)
 
-    const [newsletters, orders, rsvps, contactMessages, squareWebhookEvents, orderEvents, adminAccessRequests] = usingMongo
+    const [newsletters, orders, rsvps, contactMessages, blogPosts, squareWebhookEvents, orderEvents, adminAccessRequests, adminUsers] = usingMongo
       ? await Promise.all([
           listCollection(db, 'newsletters'),
           listCollection(db, 'orders'),
           listCollection(db, 'rsvps'),
           listCollection(db, 'contactMessages'),
+          listBlogPosts(db, 20),
           listCollection(db, 'squareWebhookEvents'),
           listRecentOrderEvents(db, 25),
           listCollection(db, 'adminAccessRequests'),
+          db.collection('adminUsers').find({}).sort({ createdAt: -1 }).toArray(),
         ])
       : [
           [...memoryStore.newsletters].slice(0, 20),
           [...memoryStore.orders].slice(0, 20),
           [...memoryStore.rsvps].slice(0, 20),
           [...memoryStore.contactMessages].slice(0, 20),
+          await listBlogPosts(db, 20),
           [...memoryStore.squareWebhookEvents].slice(0, 20),
           [...memoryStore.orderEvents].slice(0, 25),
           [...memoryStore.adminAccessRequests].slice(0, 20),
+          [...memoryStore.adminUsers],
         ]
 
     sendJson(response, 200, {
@@ -1987,10 +2810,12 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         message: item.message,
         createdAt: item.createdAt,
       })),
+      blogPosts: blogPosts.map((item) => serializeBlogPost(item)),
       orderEvents: orderEvents.map((item) => ({
         ...item,
       })),
       adminPermissions,
+      adminUsers: adminUsers.map((item) => serializeAdminUser(item)),
       adminAccessRequests: adminPermissions.canViewAdminAccessRequests
         ? adminAccessRequests.map((item) => ({
             id: item.id,
@@ -2004,6 +2829,15 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
           }))
         : [],
       squareSyncStatus: adminPermissions.canViewSquareSync ? await getSquareSyncStatus(db, env) : null,
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/officers') {
+    const officers = await listPublicOfficerProfiles(db)
+    sendJson(response, 200, {
+      ok: true,
+      officers,
     })
     return true
   }
@@ -2066,6 +2900,23 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     return true
   }
 
+  if (request.method === 'GET' && pathname === '/api/link-preview') {
+    const url = new URL(request.url, 'http://localhost').searchParams.get('url')?.trim() || ''
+    if (!url || !isSafeBlogLink(url)) {
+      sendJson(response, 400, { ok: false, message: 'A valid link is required.' })
+      return true
+    }
+
+    const preview = await fetchLinkPreview(url)
+    if (!preview) {
+      sendJson(response, 404, { ok: false, message: 'Preview unavailable.' })
+      return true
+    }
+
+    sendJson(response, 200, { ok: true, preview })
+    return true
+  }
+
   if (request.method === 'DELETE' && pathname === '/api/site-data') {
     if (!(await requirePriestAuth(db, request, response))) return true
     const currentAdmin = await getAuthenticatedPriestUser(db, request)
@@ -2086,6 +2937,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         db.collection('paymentLinks').deleteMany({}),
         db.collection('rsvps').deleteMany({}),
         db.collection('contactMessages').deleteMany({}),
+        db.collection('blogPosts').deleteMany({}),
+        db.collection('blogPostLikes').deleteMany({}),
         db.collection('adminAccessRequests').deleteMany({}),
       ])
     } else {
@@ -2099,10 +2952,276 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       memoryStore.paymentLinks = []
       memoryStore.rsvps = []
       memoryStore.contactMessages = []
+      memoryStore.blogPosts = []
+      memoryStore.blogPostLikes = []
       memoryStore.adminAccessRequests = []
     }
 
     sendJson(response, 200, { ok: true })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/blog-posts') {
+    const postId = new URL(request.url, 'http://localhost').searchParams.get('postId')?.trim() || ''
+    if (postId) {
+      const blogPost = await findBlogPostById(db, postId)
+      if (!blogPost || !isApprovedBlogPost(blogPost)) {
+        sendJson(response, 404, { ok: false, message: 'Post not found.' })
+        return true
+      }
+
+      sendJson(response, 200, {
+        ok: true,
+        blogPost: serializeBlogPost(blogPost),
+      })
+      return true
+    }
+
+    const blogPosts = await listBlogPosts(db, 20)
+    sendJson(response, 200, {
+      ok: true,
+      blogPosts: blogPosts.map((item) => serializeBlogPost(item)),
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/priest-auth/blog-posts') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const blogPosts = await listAllBlogPosts(db, 50)
+    sendJson(response, 200, {
+      ok: true,
+      blogPosts: blogPosts.map((item) => serializeBlogPost(item)),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/blog-posts') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, {
+        ok: false,
+        message: 'Admin sign in required.',
+      })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const title = typeof body.title === 'string' ? body.title.trim() : ''
+    const bodyHtml = sanitizeBlogHtml(typeof body.bodyHtml === 'string' ? body.bodyHtml : '')
+    const bodyText = stripBlogHtml(bodyHtml)
+    const mediaUrl = typeof body.mediaUrl === 'string' ? body.mediaUrl.trim() : ''
+    const mediaCaption = typeof body.mediaCaption === 'string' ? body.mediaCaption.trim() : ''
+    const linkedOfficer = getBlogAuthorById(currentAdmin?.officerId || '')
+    const authorPhotoUrl = normalizeProfilePhotoUrl(currentAdmin?.photoUrl || linkedOfficer?.photo || '')
+    const authorTitle = normalizeAdminTitle(currentAdmin?.title || '')
+    const isSuperAdmin = Boolean(currentAdmin?.officerId)
+
+    if (!title || (!bodyText && !hasBlogMediaContent(bodyHtml) && !mediaUrl)) {
+      sendJson(response, 400, { ok: false, message: 'Title and body are required.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
+    const approvalStatus = isSuperAdmin ? 'approved' : 'pending'
+    const entry = {
+      id: randomUUID(),
+      authorId: currentAdmin.id,
+      authorType: 'admin',
+      authorName: currentAdmin.name || '',
+      authorTitle,
+      authorPhotoUrl,
+      authorRole: isSuperAdmin ? 'Super admin' : 'Admin',
+      authorOfficerId: currentAdmin.officerId || '',
+      title,
+      body: bodyText,
+      bodyHtml,
+      mediaUrl,
+      mediaCaption,
+      likes: 0,
+      approvalStatus,
+      approvalCount: isSuperAdmin ? 1 : 0,
+      approvedAt: isSuperAdmin ? now : '',
+      approvedBy: isSuperAdmin
+        ? {
+            id: currentAdmin.id,
+            name: currentAdmin.name || '',
+            title: authorTitle,
+            photoUrl: authorPhotoUrl,
+          }
+        : null,
+      publishedAt: isSuperAdmin ? now : '',
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    await saveBlogPost(db, entry)
+
+    sendJson(response, 200, {
+      ok: true,
+      blogPost: serializeBlogPost(entry),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/blog-posts/approve') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    if (!currentAdmin.officerId) {
+      sendJson(response, 403, { ok: false, message: 'Only super admins can approve blog posts.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const postId = typeof body.postId === 'string' ? body.postId.trim() : ''
+    if (!postId) {
+      sendJson(response, 400, { ok: false, message: 'Post id is required.' })
+      return true
+    }
+
+    const blogPost = await findBlogPostById(db, postId)
+    if (!blogPost) {
+      sendJson(response, 404, { ok: false, message: 'Post not found.' })
+      return true
+    }
+
+    if (isApprovedBlogPost(blogPost)) {
+      sendJson(response, 400, { ok: false, message: 'Post is already approved.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
+    const updated = {
+      ...blogPost,
+      approvalStatus: 'approved',
+      approvalCount: Number(blogPost.approvalCount || 0) + 1,
+      approvedAt: now,
+      approvedBy: {
+        id: currentAdmin.id,
+        name: currentAdmin.name || '',
+        title: normalizeAdminTitle(currentAdmin.title || ''),
+        photoUrl: normalizeProfilePhotoUrl(currentAdmin.photoUrl || ''),
+      },
+      publishedAt: blogPost.publishedAt || now,
+      updatedAt: now,
+    }
+
+    if (db) {
+      await getBlogPostsCollection(db).updateOne(
+        { id: postId },
+        {
+          $set: {
+            approvalStatus: updated.approvalStatus,
+            approvalCount: updated.approvalCount,
+            approvedAt: updated.approvedAt,
+            approvedBy: updated.approvedBy,
+            publishedAt: updated.publishedAt,
+            updatedAt: updated.updatedAt,
+          },
+        },
+      )
+    } else {
+      const index = memoryStore.blogPosts.findIndex((item) => item.id === postId)
+      if (index >= 0) {
+        memoryStore.blogPosts[index] = updated
+      }
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Post approved.',
+      blogPost: serializeBlogPost(updated),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/blog-posts/like') {
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const postId = new URL(request.url, 'http://localhost').searchParams.get('postId')?.trim() || ''
+    if (!postId) {
+      sendJson(response, 400, { ok: false, message: 'Post id is required.' })
+      return true
+    }
+
+    const result = await recordBlogPostLike(db, request, env, postId)
+    if (!result.ok) {
+      sendJson(response, result.code === 'not_found' ? 404 : 400, {
+        ok: false,
+        message: result.message,
+      })
+      return true
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      alreadyLiked: Boolean(result.alreadyLiked),
+      blogPost: serializeBlogPost(result.post),
+    })
+    return true
+  }
+
+  if (request.method === 'DELETE' && pathname === '/api/blog-posts') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, {
+        ok: false,
+        message: 'Admin sign in required.',
+      })
+      return true
+    }
+
+    const postId = new URL(request.url, 'http://localhost').searchParams.get('postId')?.trim() || ''
+    if (!postId) {
+      sendJson(response, 400, { ok: false, message: 'Post id is required.' })
+      return true
+    }
+
+    const post = await findBlogPostById(db, postId)
+    if (!post) {
+      sendJson(response, 404, { ok: false, message: 'Post not found.' })
+      return true
+    }
+
+    if (post.authorId !== currentAdmin.id && post.authorId !== currentAdmin.officerId) {
+      sendJson(response, 403, {
+        ok: false,
+        message: 'Only the poster can delete this item.',
+      })
+      return true
+    }
+
+    const deleted = await deleteBlogPostById(db, postId)
+    if (!deleted) {
+      sendJson(response, 404, { ok: false, message: 'Post not found.' })
+      return true
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Post deleted.',
+      postId,
+    })
     return true
   }
 
@@ -2893,11 +4012,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
 
   if (request.method === 'GET' && pathname === '/api/priest-auth/status') {
     const state = await getPriestAuthState(db)
-    const authenticated = Boolean(await isPriestAuthenticated(db, request))
+    const user = await getAuthenticatedPriestUser(db, request)
+    const authenticated = Boolean(user)
     sendJson(response, 200, {
       ok: true,
       configured: Boolean(state.configured),
       authenticated,
+      user: serializeAdminUser(user),
     })
     return true
   }
@@ -3050,6 +4171,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         email: requestEntry.email,
         passwordHash: requestEntry.passwordHash,
         role: 'staff',
+        title: '',
+        photoUrl: '',
         createdAt: requestEntry.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastLoginAt: '',
@@ -3128,6 +4251,228 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     }
 
     sendJson(response, 200, { ok: true, message: 'Signed in.', user: serializeAdminUser(nextAdmin) })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/admin-users/update') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const targetAdminId = typeof body.adminUserId === 'string' ? body.adminUserId.trim() : ''
+    const targetAdmin = await getAdminUserById(db, targetAdminId || currentAdmin?.id || '')
+
+    if (!targetAdmin) {
+      sendJson(response, 404, { ok: false, message: 'Admin account not found.' })
+      return true
+    }
+
+    const isSelfEdit = targetAdmin.id === currentAdmin.id
+    if (!isSelfEdit && !currentAdmin?.officerId) {
+      sendJson(response, 403, { ok: false, message: 'Only super admins can assign titles.' })
+      return true
+    }
+
+    const nextTitle = normalizeAdminTitle(typeof body.title === 'string' ? body.title : targetAdmin.title || '')
+
+    if (typeof body.photoUrl !== 'undefined') {
+      sendJson(response, 400, { ok: false, message: 'Use the photo upload tool to change profile photos.' })
+      return true
+    }
+
+    const updatedAt = new Date().toISOString()
+    const updates = {
+      updatedAt,
+      title: nextTitle,
+    }
+
+    if (db) {
+      await getAdminUsersCollection(db).updateOne(
+        { id: targetAdmin.id },
+        { $set: updates },
+      )
+    } else {
+      const index = memoryStore.adminUsers.findIndex((item) => item.id === targetAdmin.id)
+      if (index >= 0) {
+        memoryStore.adminUsers[index] = {
+          ...memoryStore.adminUsers[index],
+          ...updates,
+        }
+      }
+    }
+
+    const refreshedAdmin = await getAdminUserById(db, targetAdmin.id)
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Admin title updated.',
+      user: serializeAdminUser(refreshedAdmin),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/admin-users/credentials') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const currentPassword = normalizePassword(body.currentPassword)
+    const nextPassword = normalizePassword(body.newPassword)
+    const confirmPassword = normalizePassword(body.confirmPassword)
+    const nextEmail = normalizeEmail(body.email || currentAdmin.email)
+
+    if (!currentPassword) {
+      sendJson(response, 400, { ok: false, message: 'Current password is required.' })
+      return true
+    }
+
+    if (!verifyPassword(currentPassword, currentAdmin.passwordHash)) {
+      sendJson(response, 401, { ok: false, message: 'Current password is incorrect.' })
+      return true
+    }
+
+    if (!nextEmail) {
+      sendJson(response, 400, { ok: false, message: 'Email is required.' })
+      return true
+    }
+
+    if (nextPassword || confirmPassword) {
+      if (!nextPassword || !confirmPassword) {
+        sendJson(response, 400, { ok: false, message: 'New password and confirmation are required.' })
+        return true
+      }
+
+      if (nextPassword !== confirmPassword) {
+        sendJson(response, 400, { ok: false, message: 'New password confirmation does not match.' })
+        return true
+      }
+
+      if (!isValidPassword(nextPassword)) {
+        sendJson(response, 400, { ok: false, message: 'New password must be at least 8 characters.' })
+        return true
+      }
+    }
+
+    const existingAdmin = await getAdminUserByEmail(db, nextEmail)
+    if (existingAdmin && existingAdmin.id !== currentAdmin.id) {
+      sendJson(response, 409, { ok: false, message: 'Another account already uses that email.' })
+      return true
+    }
+
+    const updatedAt = new Date().toISOString()
+    const updates = {
+      email: nextEmail,
+      updatedAt,
+    }
+
+    if (nextPassword) {
+      updates.passwordHash = hashPassword(nextPassword)
+      updates.credentialsUpdatedAt = updatedAt
+    }
+
+    if (db) {
+      await getAdminUsersCollection(db).updateOne({ id: currentAdmin.id }, { $set: updates })
+    } else {
+      Object.assign(currentAdmin, updates)
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      message: nextPassword
+        ? 'Credentials updated.'
+        : 'Email updated.',
+      user: serializeAdminUser({ ...currentAdmin, ...updates }),
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/admin-users/photo') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const contentType = request.headers['content-type'] || ''
+    if (!String(contentType).toLowerCase().includes('multipart/form-data')) {
+      sendJson(response, 400, { ok: false, message: 'Profile photo upload requires form data.' })
+      return true
+    }
+
+    let parsed
+    try {
+      parsed = await parseMultipartRequest(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, message: error?.message || 'Unable to read the upload.' })
+      return true
+    }
+
+    const file = parsed?.file
+    if (!file?.buffer?.length) {
+      sendJson(response, 400, { ok: false, message: 'Choose an image to upload.' })
+      return true
+    }
+
+    const extension = getAdminPhotoExtension(file.mimeType, file.filename)
+    if (!extension) {
+      sendJson(response, 400, { ok: false, message: 'Upload a JPG, PNG, GIF, or WebP image.' })
+      return true
+    }
+
+    await ensureAdminPhotoDir()
+
+    const nextFileName = `${currentAdmin.id}-${Date.now()}${extension}`
+    const nextPhotoPath = resolve(ADMIN_PHOTO_DIR, nextFileName)
+    const nextPhotoUrl = `${ADMIN_PHOTO_ROUTE_PREFIX}${nextFileName}`
+    const previousPhotoUrl = normalizeProfilePhotoUrl(currentAdmin.photoUrl || '')
+
+    await writeFile(nextPhotoPath, file.buffer)
+
+    try {
+      if (db) {
+        await getAdminUsersCollection(db).updateOne(
+          { id: currentAdmin.id },
+          { $set: { photoUrl: nextPhotoUrl, updatedAt: new Date().toISOString() } },
+        )
+      } else {
+        const index = memoryStore.adminUsers.findIndex((item) => item.id === currentAdmin.id)
+        if (index >= 0) {
+          memoryStore.adminUsers[index] = {
+            ...memoryStore.adminUsers[index],
+            photoUrl: nextPhotoUrl,
+            updatedAt: new Date().toISOString(),
+          }
+        }
+      }
+    } catch (error) {
+      await deleteManagedAdminPhoto(nextPhotoUrl)
+      throw error
+    }
+
+    if (isManagedAdminPhotoUrl(previousPhotoUrl) && previousPhotoUrl !== nextPhotoUrl) {
+      await deleteManagedAdminPhoto(previousPhotoUrl)
+    }
+
+    const refreshedAdmin = await getAdminUserById(db, currentAdmin.id)
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Profile photo updated.',
+      user: serializeAdminUser(refreshedAdmin),
+    })
     return true
   }
 
@@ -4453,4 +5798,8 @@ export function createApiPlugin(env) {
       server.middlewares.use(middleware)
     },
   }
+}
+
+export async function initializeSiteApi(env = {}) {
+  await getDb(env)
 }

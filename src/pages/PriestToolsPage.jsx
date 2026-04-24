@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import { ProfileAvatar } from '../components/ProfileAvatar.jsx'
 import {
   loadPriestAuthStatus,
   loadSiteData,
@@ -7,6 +8,7 @@ import {
   processServiceCancellation,
   processServiceRefund,
   syncSquareOrders,
+  updateAdminUserProfile,
 } from '../lib/siteApi.js'
 import {
   AdminAccessRequestsPanel,
@@ -22,6 +24,7 @@ function PriestToolsPage() {
     loading: true,
     authenticated: false,
   })
+  const [adminUser, setAdminUser] = useState(null)
   const [requests, setRequests] = useState([])
   const [syncStatus, setSyncStatus] = useState({
     webhookConfigured: false,
@@ -33,8 +36,11 @@ function PriestToolsPage() {
   })
   const [recentEvents, setRecentEvents] = useState([])
   const [adminAccessRequests, setAdminAccessRequests] = useState([])
+  const [adminUsers, setAdminUsers] = useState([])
   const [adminPermissions, setAdminPermissions] = useState({
     role: 'staff',
+    isSuperAdmin: false,
+    canAssignAdminTitles: false,
     canViewAdminAccessRequests: false,
     canViewSquareSync: false,
     canResetSiteData: false,
@@ -51,6 +57,9 @@ function PriestToolsPage() {
   const [syncMessage, setSyncMessage] = useState('')
   const [orderSyncBusyById, setOrderSyncBusyById] = useState({})
   const [orderSyncStatusById, setOrderSyncStatusById] = useState({})
+  const [adminProfileDrafts, setAdminProfileDrafts] = useState({})
+  const [adminProfileBusyById, setAdminProfileBusyById] = useState({})
+  const [adminProfileStatusById, setAdminProfileStatusById] = useState({})
 
   const sortedRequests = useMemo(() => {
     return [...requests].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
@@ -77,6 +86,7 @@ function PriestToolsPage() {
       loading: false,
       authenticated: Boolean(status.authenticated),
     })
+    setAdminUser(status.user || null)
     return status
   }, [])
 
@@ -89,9 +99,12 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
+      setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
         data.adminPermissions || {
           role: 'staff',
+          isSuperAdmin: false,
+          canAssignAdminTitles: false,
           canViewAdminAccessRequests: false,
           canViewSquareSync: false,
           canResetSiteData: false,
@@ -133,6 +146,19 @@ function PriestToolsPage() {
         navigate('/priest-review', { replace: true })
       })
   }, [navigate, refreshAuth, refreshRequests])
+
+  useEffect(() => {
+    setAdminProfileDrafts((current) => {
+      const next = { ...current }
+      adminUsers.forEach((item) => {
+        const existing = next[item.id] || {}
+        next[item.id] = {
+          title: existing.title ?? item.title ?? '',
+        }
+      })
+      return next
+    })
+  }, [adminUsers])
 
   const handleMarkComplete = async (request) => {
     if (!request.id) return
@@ -278,9 +304,12 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
+      setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
         data.adminPermissions || {
           role: 'staff',
+          isSuperAdmin: false,
+          canAssignAdminTitles: false,
           canViewAdminAccessRequests: false,
           canViewSquareSync: false,
           canResetSiteData: false,
@@ -324,9 +353,12 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
+      setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
         data.adminPermissions || {
           role: 'staff',
+          isSuperAdmin: false,
+          canAssignAdminTitles: false,
           canViewAdminAccessRequests: false,
           canViewSquareSync: false,
           canResetSiteData: false,
@@ -351,6 +383,54 @@ function PriestToolsPage() {
       setOrderSyncBusyById((current) => ({ ...current, [request.id]: false }))
     }
   }
+
+  const handleSaveAdminProfile = async (adminProfile) => {
+    if (!adminProfile?.id) return
+
+    setAdminProfileBusyById((current) => ({ ...current, [adminProfile.id]: true }))
+    setAdminProfileStatusById((current) => ({ ...current, [adminProfile.id]: '' }))
+
+    const draft = adminProfileDrafts[adminProfile.id] || {}
+
+    try {
+      const result = await updateAdminUserProfile({
+        adminUserId: adminProfile.id,
+        title: draft.title || '',
+      })
+
+      setAdminProfileStatusById((current) => ({
+        ...current,
+        [adminProfile.id]: result.message || 'Admin profile updated.',
+      }))
+
+      if (result.user?.id) {
+        setAdminProfileDrafts((current) => ({
+          ...current,
+          [result.user.id]: {
+            title: result.user.title || '',
+          },
+        }))
+      }
+
+      setAdminUsers((current) =>
+        current.map((item) => (item.id === adminProfile.id ? result.user || item : item)),
+      )
+      if (adminUser?.id === adminProfile.id) {
+        setAdminUser(result.user || null)
+      }
+      await refreshAuth()
+      await refreshRequests()
+    } catch (profileError) {
+      setAdminProfileStatusById((current) => ({
+        ...current,
+        [adminProfile.id]: profileError?.message || 'Unable to update admin profile.',
+      }))
+    } finally {
+      setAdminProfileBusyById((current) => ({ ...current, [adminProfile.id]: false }))
+    }
+  }
+
+  const isSuperAdmin = Boolean(adminPermissions.canAssignAdminTitles)
 
   return (
     <main className="priest-tools-page min-vh-100" data-bs-theme="dark">
@@ -381,10 +461,11 @@ function PriestToolsPage() {
                     Review incoming requests, then open the separate payment request or custom payment page when it is time to send a payment link.
                   </p>
                   <div className="d-flex flex-wrap gap-2 mt-3">
-                    <span className="badge text-bg-light border text-dark">
-                      Role: {adminPermissions.role === 'owner' ? 'Owner' : 'Staff'}
+                  <span className="badge text-bg-light border text-dark">
+                      Role: {isSuperAdmin ? 'Super admin' : adminPermissions.role === 'owner' ? 'Owner' : 'Staff'}
                     </span>
                     <span className="badge text-bg-light border text-dark">Order audit log enabled</span>
+                    {adminUser?.officer ? <span className="badge text-bg-success">{adminUser.officer.name}</span> : null}
                   </div>
                 </div>
                 <div className="col-lg-4">
@@ -395,6 +476,82 @@ function PriestToolsPage() {
                   </div>
                 </div>
               </div>
+
+              {isSuperAdmin ? (
+                <div className="surface surface-strong surface-pad mt-4">
+                  <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                    <div>
+                      <p className="section-kicker mb-2">Admin titles</p>
+                      <h2 className="h4 mb-0">Assign officer titles</h2>
+                    </div>
+                  </div>
+                  <div className="row g-3">
+                    {adminUsers.map((adminProfile) => {
+                      const draft = adminProfileDrafts[adminProfile.id] || {
+                        title: adminProfile.title || '',
+                      }
+
+                      return (
+                        <div className="col-12" key={adminProfile.id}>
+                          <div className="surface surface-soft surface-pad">
+                            <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                              <div className="blog-composer-head mb-0">
+                                <ProfileAvatar name={adminProfile.name} photoUrl={adminProfile.photoUrl} />
+                                <div>
+                                  <strong>{adminProfile.name}</strong>
+                                  <span>{adminProfile.email}</span>
+                                </div>
+                              </div>
+                              <span className="badge text-bg-light border text-dark">
+                                {adminProfile.isSuperAdmin ? 'Super admin' : 'Admin'}
+                              </span>
+                            </div>
+                            <div className="row g-3 align-items-end">
+                              <div className="col-md-5">
+                                <label className="form-label">Officer title</label>
+                                <input
+                                  type="text"
+                                  className="form-control"
+                                  value={draft.title}
+                                  onChange={(event) =>
+                                    setAdminProfileDrafts((current) => ({
+                                      ...current,
+                                      [adminProfile.id]: {
+                                        ...draft,
+                                        title: event.target.value,
+                                      },
+                                    }))
+                                  }
+                                  placeholder="Temple secretary, event lead, ..."
+                                />
+                              </div>
+                              <div className="col-md-5">
+                                <div className="small text-secondary">
+                                  Use Edit profile for your own photo and credentials. Super admins assign officer titles
+                                  here.
+                                </div>
+                              </div>
+                              <div className="col-md-2 d-grid">
+                                <button
+                                  type="button"
+                                  className="btn btn-primary rounded-pill px-3"
+                                  disabled={Boolean(adminProfileBusyById[adminProfile.id])}
+                                  onClick={() => handleSaveAdminProfile(adminProfile)}
+                                >
+                                  {adminProfileBusyById[adminProfile.id] ? 'Saving...' : 'Save'}
+                                </button>
+                              </div>
+                            </div>
+                            {adminProfileStatusById[adminProfile.id] ? (
+                              <div className="small text-secondary mt-3">{adminProfileStatusById[adminProfile.id]}</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="row g-3 mt-4">
                 <div className="col-sm-4">

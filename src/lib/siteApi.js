@@ -30,6 +30,92 @@ export async function loadSiteData() {
   return requestJson('/api/site-data')
 }
 
+export async function loadOfficers() {
+  return requestJson('/api/officers')
+}
+
+export async function loadBlogPosts() {
+  return requestJson('/api/blog-posts')
+}
+
+export async function loadBlogPost(postId) {
+  const params = new URLSearchParams()
+  params.set('postId', postId || '')
+  return requestJson(`/api/blog-posts?${params.toString()}`)
+}
+
+export async function loadLinkPreview(url) {
+  const params = new URLSearchParams()
+  params.set('url', url || '')
+  return requestJson(`/api/link-preview?${params.toString()}`)
+}
+
+export async function loadAdminBlogPosts() {
+  return requestJson('/api/priest-auth/blog-posts')
+}
+
+export async function createBlogPost(payload) {
+  return requestJson('/api/blog-posts', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function approveBlogPost(payload) {
+  return requestJson('/api/priest-auth/blog-posts/approve', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function likeBlogPost(postId) {
+  const params = new URLSearchParams()
+  params.set('postId', postId || '')
+  return requestJson(`/api/blog-posts/like?${params.toString()}`, {
+    method: 'POST',
+  })
+}
+
+export async function deleteBlogPost(postId) {
+  const params = new URLSearchParams()
+  params.set('postId', postId || '')
+  return requestJson(`/api/blog-posts?${params.toString()}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function updateAdminUserProfile(payload) {
+  return requestJson('/api/priest-auth/admin-users/update', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateAdminUserCredentials(payload) {
+  return requestJson('/api/priest-auth/admin-users/credentials', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function uploadAdminProfilePhoto(file) {
+  const formData = new FormData()
+  formData.append('photo', file)
+
+  const response = await fetch('/api/priest-auth/admin-users/photo', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: formData,
+  })
+
+  const data = await parseJson(response)
+  if (!response.ok) {
+    throw new Error(data.message || 'Unable to complete the request.')
+  }
+
+  return data
+}
+
 export async function loadPriestAuthStatus() {
   return requestJson('/api/priest-auth/status')
 }

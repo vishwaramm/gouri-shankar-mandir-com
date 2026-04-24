@@ -1,11 +1,33 @@
 services:
+  mongo:
+    image: mongo:7
+    container_name: gouri-shankar-mandir-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   api:
     build:
       context: .
       dockerfile: Dockerfile.api
     container_name: gouri-shankar-mandir-api
+    depends_on:
+      mongo:
+        condition: service_healthy
     env_file:
       - .env.local
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/gourishankar_mandir
+      STRICT_PERSISTENCE: "1"
+    volumes:
+      - admin-photo-data:/app/uploads
+      - ./persistent-state:/app/persistent-state
     ports:
       - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8200}:8080"
     restart: unless-stopped
@@ -17,6 +39,16 @@ services:
     container_name: gouri-shankar-mandir-web
     depends_on:
       - api
+    volumes:
+      - admin-photo-data:/app/uploads
     ports:
       - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-3200}:80"
     restart: unless-stopped
+
+volumes:
+  mongo-data:
+    external: true
+    name: gourishankar-mandir-mongo-data
+  admin-photo-data:
+    external: true
+    name: gourishankar-mandir-admin-photo-data

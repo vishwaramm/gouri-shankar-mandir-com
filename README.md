@@ -19,18 +19,89 @@ npm run start:api
 
 ## Docker layout
 
-This repo is set up for two containers:
+This repo is set up for three containers:
 
-- `web`: Vite build served by Nginx on port `3200` by default
+- `mongo`: persistent MongoDB storage for the app data
+- `web`: Node web server that serves the Vite build and blog share metadata on port `3200` by default
 - `api`: Node mail/data API on port `8200` by default
 
-The web container proxies `/api/*` to the API container, so the browser only needs one public origin.
+The web container proxies `/api/*` to the API container and serves crawlable blog post pages, so the browser only needs one public origin. The MongoDB volume keeps admin accounts and site data across rebuilds. The API also writes a persistence lock to `persistent-state/mongo-lock.json` on the host; if Mongo is ever replaced with a brand-new empty volume, the app refuses to start instead of silently using the wrong database.
+The shared uploads volume stores admin profile photos locally and replaces the previous file when an admin updates their own photo.
 
 Build and run:
 
 ```bash
+docker volume create gourishankar-mandir-mongo-data
+docker volume create gourishankar-mandir-admin-photo-data
 docker compose up -d --build
 ```
+
+If you use the bundled compose stack, you do not need to supply `MONGODB_URI` just to keep data persistent. The API points at the local Mongo service by default.
+The Mongo volume is marked external, so Compose will refuse to start if that volume is missing instead of creating a fresh empty database.
+The admin photo volume is also external, so profile images persist across rebuilds instead of being replaced by a new empty volume.
+
+## Moving to a new machine
+
+If you migrate the site to a different server, copy both Docker volumes and the persistence lock:
+
+1. On the old machine, stop the stack:
+
+   ```bash
+   docker compose down
+   ```
+
+2. Export the Mongo volume:
+
+   ```bash
+   docker run --rm \
+     -v gourishankar-mandir-mongo-data:/data/db \
+     -v "$PWD:/backup" \
+     alpine sh -c 'cd /data/db && tar czf /backup/mongo-data.tar.gz .'
+   ```
+
+3. Export the admin photo volume:
+
+   ```bash
+   docker run --rm \
+     -v gourishankar-mandir-admin-photo-data:/data/uploads \
+     -v "$PWD:/backup" \
+     alpine sh -c 'cd /data/uploads && tar czf /backup/admin-photo-data.tar.gz .'
+   ```
+
+4. Copy the repository, `mongo-data.tar.gz`, `admin-photo-data.tar.gz`, and `persistent-state/mongo-lock.json` to the new machine.
+
+5. On the new machine, create the external volumes first:
+
+   ```bash
+   docker volume create gourishankar-mandir-mongo-data
+   docker volume create gourishankar-mandir-admin-photo-data
+   ```
+
+6. Restore the Mongo data:
+
+   ```bash
+   docker run --rm \
+     -v gourishankar-mandir-mongo-data:/data/db \
+     -v "$PWD:/backup" \
+     alpine sh -c 'cd /data/db && tar xzf /backup/mongo-data.tar.gz'
+   ```
+
+7. Restore the admin photos:
+
+   ```bash
+   docker run --rm \
+     -v gourishankar-mandir-admin-photo-data:/data/uploads \
+     -v "$PWD:/backup" \
+     alpine sh -c 'cd /data/uploads && tar xzf /backup/admin-photo-data.tar.gz'
+   ```
+
+8. Start the stack:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+If the Mongo volume and `persistent-state/mongo-lock.json` do not match, the API will refuse to start so you do not accidentally connect to a fresh empty database.
 
 Default container ports:
 
