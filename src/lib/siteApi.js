@@ -20,7 +20,10 @@ async function requestJson(path, options = {}) {
 
   const data = await parseJson(response)
   if (!response.ok) {
-    throw new Error(data.message || 'Unable to complete the request.')
+    const error = new Error(data.message || 'Unable to complete the request.')
+    error.status = response.status
+    error.data = data
+    throw error
   }
 
   return data
@@ -28,6 +31,44 @@ async function requestJson(path, options = {}) {
 
 export async function loadSiteData() {
   return requestJson('/api/site-data')
+}
+
+export async function loadApiMetrics() {
+  return requestJson('/api/metrics')
+}
+
+export async function loadOperationalAlerts() {
+  return requestJson('/api/priest-auth/alerts')
+}
+
+export async function resolveOperationalAlert(payload) {
+  return requestJson('/api/priest-auth/alerts/resolve', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function reportClientError(payload) {
+  try {
+    const response = await fetch('/api/client-errors', {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload || {}),
+    })
+
+    const data = await parseJson(response)
+    if (!response.ok) {
+      throw new Error(data.message || 'Unable to capture the error.')
+    }
+
+    return data
+  } catch {
+    return null
+  }
 }
 
 export async function loadOfficers() {
@@ -132,6 +173,10 @@ export async function loadUserOrders() {
   return requestJson('/api/users/orders')
 }
 
+export async function loadUserRsvps() {
+  return requestJson('/api/users/rsvps')
+}
+
 export async function lookupOrder(payload) {
   const params = new URLSearchParams()
   params.set('code', payload.code || '')
@@ -227,7 +272,7 @@ export async function verifyUserEmail(token) {
 export async function createNewsletter(email) {
   return requestJson('/api/newsletters', {
     method: 'POST',
-    body: JSON.stringify({ email }),
+    body: JSON.stringify(typeof email === 'object' ? email : { email }),
   })
 }
 
@@ -310,7 +355,7 @@ export async function resolvePaymentLink(token) {
 export async function createRsvp(event) {
   return requestJson('/api/rsvps', {
     method: 'POST',
-    body: JSON.stringify({ event }),
+    body: JSON.stringify(typeof event === 'string' ? { event } : event || {}),
   })
 }
 

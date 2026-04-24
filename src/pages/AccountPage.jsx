@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { OrderProgress } from '../components/OrderProgress.jsx'
+import PasswordField from '../components/PasswordField.jsx'
+import { buildCalendarEventDetails } from '../lib/calendar.js'
 import {
   changeUserPassword,
   loadCurrentUser,
   loadUserOrders,
+  loadUserRsvps,
   logoutUser,
   resendUserVerification,
   updateUserProfile,
@@ -48,6 +51,14 @@ function AccountPage() {
       completed: 0,
     },
   })
+  const [rsvpState, setRsvpState] = useState({
+    loading: false,
+    rsvps: [],
+    summary: {
+      totalRsvps: 0,
+      upcomingRsvps: 0,
+    },
+  })
   const [profileForm, setProfileForm] = useState({
     name: '',
     email: '',
@@ -56,6 +67,7 @@ function AccountPage() {
   const [notificationPrefs, setNotificationPrefs] = useState({
     serviceEmails: true,
     templeLetters: false,
+    eventReminders: true,
   })
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
@@ -87,6 +99,7 @@ function AccountPage() {
     setNotificationPrefs({
       serviceEmails: auth.user.notificationPrefs?.serviceEmails !== false,
       templeLetters: Boolean(auth.user.notificationPrefs?.templeLetters),
+      eventReminders: auth.user.notificationPrefs?.eventReminders !== false,
     })
   }, [auth.user])
 
@@ -99,24 +112,40 @@ function AccountPage() {
         orders: [],
         summary: { totalOrders: 0, inProgress: 0, completed: 0 },
       })
+      setRsvpState({
+        loading: false,
+        rsvps: [],
+        summary: { totalRsvps: 0, upcomingRsvps: 0 },
+      })
       return
     }
 
     setAuth({ loading: false, authenticated: true, user: status.user })
     setOrdersState((current) => ({ ...current, loading: true }))
+    setRsvpState((current) => ({ ...current, loading: true }))
 
     try {
-      const result = await loadUserOrders()
+      const [orderResult, rsvpResult] = await Promise.all([loadUserOrders(), loadUserRsvps()])
       setOrdersState({
         loading: false,
-        orders: Array.isArray(result.orders) ? result.orders : [],
-        summary: result.summary || { totalOrders: 0, inProgress: 0, completed: 0 },
+        orders: Array.isArray(orderResult.orders) ? orderResult.orders : [],
+        summary: orderResult.summary || { totalOrders: 0, inProgress: 0, completed: 0 },
+      })
+      setRsvpState({
+        loading: false,
+        rsvps: Array.isArray(rsvpResult.rsvps) ? rsvpResult.rsvps : [],
+        summary: rsvpResult.summary || { totalRsvps: 0, upcomingRsvps: 0 },
       })
     } catch {
       setOrdersState({
         loading: false,
         orders: [],
         summary: { totalOrders: 0, inProgress: 0, completed: 0 },
+      })
+      setRsvpState({
+        loading: false,
+        rsvps: [],
+        summary: { totalRsvps: 0, upcomingRsvps: 0 },
       })
     }
   }
@@ -128,6 +157,11 @@ function AccountPage() {
         loading: false,
         orders: [],
         summary: { totalOrders: 0, inProgress: 0, completed: 0 },
+      })
+      setRsvpState({
+        loading: false,
+        rsvps: [],
+        summary: { totalRsvps: 0, upcomingRsvps: 0 },
       })
     })
   }, [])
@@ -217,6 +251,11 @@ function AccountPage() {
         loading: false,
         orders: [],
         summary: { totalOrders: 0, inProgress: 0, completed: 0 },
+      })
+      setRsvpState({
+        loading: false,
+        rsvps: [],
+        summary: { totalRsvps: 0, upcomingRsvps: 0 },
       })
       window.dispatchEvent(new CustomEvent('mandir-user-updated', { detail: { authenticated: false, user: null } }))
       setAccountMessage('Signed out.')
@@ -451,6 +490,23 @@ function AccountPage() {
                             Temple letters and announcements
                           </label>
                         </div>
+                        <div className="form-check mb-2">
+                          <input
+                            id="event-reminders"
+                            className="form-check-input"
+                            type="checkbox"
+                            checked={notificationPrefs.eventReminders}
+                            onChange={(event) =>
+                              setNotificationPrefs((current) => ({
+                                ...current,
+                                eventReminders: event.target.checked,
+                              }))
+                            }
+                          />
+                          <label className="form-check-label" htmlFor="event-reminders">
+                            Event reminder emails
+                          </label>
+                        </div>
                         <p className="small text-secondary mb-0">
                           Service emails include request confirmations, payment updates, and completion notices.
                         </p>
@@ -467,42 +523,30 @@ function AccountPage() {
                     <p className="section-kicker mb-2">Password</p>
                     <h2 className="h4 mb-3">Change your password</h2>
                     <form className="d-grid gap-3" onSubmit={handlePasswordChange}>
-                      <div>
-                        <label className="form-label fw-semibold">Current password</label>
-                        <input
-                          type="password"
-                          className="form-control"
-                          value={passwordForm.currentPassword}
-                          onChange={(event) =>
-                            setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))
-                          }
-                          autoComplete="current-password"
-                        />
-                      </div>
-                      <div>
-                        <label className="form-label fw-semibold">New password</label>
-                        <input
-                          type="password"
-                          className="form-control"
-                          value={passwordForm.newPassword}
-                          onChange={(event) =>
-                            setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))
-                          }
-                          autoComplete="new-password"
-                        />
-                      </div>
-                      <div>
-                        <label className="form-label fw-semibold">Confirm new password</label>
-                        <input
-                          type="password"
-                          className="form-control"
-                          value={passwordForm.confirmPassword}
-                          onChange={(event) =>
-                            setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
-                          }
-                          autoComplete="new-password"
-                        />
-                      </div>
+                      <PasswordField
+                        label="Current password"
+                        value={passwordForm.currentPassword}
+                        onChange={(event) =>
+                          setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))
+                        }
+                        autoComplete="current-password"
+                      />
+                      <PasswordField
+                        label="New password"
+                        value={passwordForm.newPassword}
+                        onChange={(event) =>
+                          setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))
+                        }
+                        autoComplete="new-password"
+                      />
+                      <PasswordField
+                        label="Confirm new password"
+                        value={passwordForm.confirmPassword}
+                        onChange={(event) =>
+                          setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
+                        }
+                        autoComplete="new-password"
+                      />
                       <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={passwordBusy}>
                         {passwordBusy ? 'Updating...' : 'Change password'}
                       </button>
@@ -512,26 +556,125 @@ function AccountPage() {
               </div>
 
               <div className="row g-4 mb-4">
-                <div className="col-md-4">
+                <div className="col-6 col-xl-3">
                   <div className="surface surface-pad h-100">
                     <p className="section-kicker mb-2">Purchase history</p>
                     <div className="display-6 mb-2">{ordersState.summary.totalOrders}</div>
                     <p className="text-secondary mb-0">Total orders linked to your account.</p>
                   </div>
                 </div>
-                <div className="col-md-4">
+                <div className="col-6 col-xl-3">
                   <div className="surface surface-pad h-100">
                     <p className="section-kicker mb-2">In progress</p>
                     <div className="display-6 mb-2">{ordersState.summary.inProgress}</div>
                     <p className="text-secondary mb-0">Requests that are waiting for review or completion.</p>
                   </div>
                 </div>
-                <div className="col-md-4">
+                <div className="col-6 col-xl-3">
                   <div className="surface surface-pad h-100">
                     <p className="section-kicker mb-2">Completed</p>
                     <div className="display-6 mb-2">{ordersState.summary.completed}</div>
                     <p className="text-secondary mb-0">Finished services with confirmation recorded.</p>
                   </div>
+                </div>
+                <div className="col-6 col-xl-3">
+                  <div className="surface surface-pad h-100">
+                    <p className="section-kicker mb-2">Event RSVPs</p>
+                    <div className="display-6 mb-2">{rsvpState.summary.totalRsvps}</div>
+                    <p className="text-secondary mb-1">Community events saved to your account.</p>
+                    <p className="small text-secondary mb-0">{rsvpState.summary.upcomingRsvps} upcoming</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="surface surface-pad mb-4">
+                <div className="row align-items-end g-3">
+                  <div className="col-lg-8">
+                    <p className="section-kicker mb-2">Event RSVPs</p>
+                    <h2 className="h4 mb-0">Your community event responses</h2>
+                  </div>
+                  <div className="col-lg-4 text-lg-end">
+                    <p className="text-secondary mb-0">These are tied to your signed-in account.</p>
+                  </div>
+                </div>
+
+                <div className="timeline-list mt-3">
+                  {rsvpState.loading ? <div className="surface surface-soft surface-pad">Loading RSVPs...</div> : null}
+                  {!rsvpState.loading && !rsvpState.rsvps.length ? (
+                    <div className="surface surface-soft surface-pad">No RSVPs saved yet.</div>
+                  ) : null}
+                  {rsvpState.rsvps.map((rsvp) => (
+                    <article className="timeline-item" key={rsvp.id || `${rsvp.eventId}-${rsvp.updatedAt}`}>
+                      <time>{formatDate(rsvp.updatedAt || rsvp.createdAt)}</time>
+                      <div>
+                        <div className="d-flex justify-content-between align-items-start gap-3">
+                          <div>
+                            <h3 className="h5 mb-1">{rsvp.eventTitle || 'Community event'}</h3>
+                            <p className="mb-1 text-secondary">
+                              {rsvp.section ? `${rsvp.section}` : 'events'}
+                              {rsvp.kind ? ` · ${rsvp.kind}` : ''}
+                            </p>
+                          </div>
+                          <span className="badge rounded-pill text-bg-light border">
+                            {rsvp.guestCount || 1} guest{(rsvp.guestCount || 1) === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                        <p className="mb-1 text-secondary">
+                          {rsvp.eventDate ? `Date: ${rsvp.eventDate}` : 'Date not set'}
+                        </p>
+                        <p className="text-secondary mb-0">{rsvp.note || 'RSVP saved to your account.'}</p>
+                        <p className="small text-secondary mt-2 mb-0">
+                          {rsvp.reminderSentAt
+                            ? `Reminder sent ${formatDate(rsvp.reminderSentAt)}`
+                            : rsvp.reminderOptIn === false
+                              ? 'Reminders turned off.'
+                              : 'Reminder scheduled automatically.'}
+                        </p>
+                        {rsvp.eventDate ? (() => {
+                          const calendarEvent = buildCalendarEventDetails({
+                            title: rsvp.eventTitle,
+                            detail: rsvp.note || '',
+                            location: rsvp.location || '',
+                            mapsUrl: rsvp.mapsUrl || '',
+                            eventDate: rsvp.eventDate,
+                          })
+
+                          if (!calendarEvent) return null
+
+                          return (
+                            <div className="d-flex flex-wrap gap-2 mt-3">
+                              <a
+                                href={calendarEvent.googleCalendarUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="btn btn-outline-light btn-sm rounded-pill"
+                              >
+                                Google Calendar
+                              </a>
+                              <button
+                                type="button"
+                                className="btn btn-outline-light btn-sm rounded-pill"
+                                onClick={() => {
+                                  const blob = new Blob([calendarEvent.icsContent], { type: 'text/calendar;charset=utf-8' })
+                                  const objectUrl = URL.createObjectURL(blob)
+                                  const link = document.createElement('a')
+                                  link.href = objectUrl
+                                  link.download = calendarEvent.icsFileName
+                                  link.rel = 'noopener'
+                                  document.body.appendChild(link)
+                                  link.click()
+                                  link.remove()
+                                  URL.revokeObjectURL(objectUrl)
+                                }}
+                              >
+                                Apple Calendar
+                              </button>
+                            </div>
+                          )
+                        })() : null}
+                      </div>
+                    </article>
+                  ))}
                 </div>
               </div>
 

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { faqItems } from '../content.js'
 import { createContactMessage, createNewsletter, loadOfficers } from '../lib/siteApi.js'
+import { createSubmissionKey, isRetryableSubmissionError, queuePendingSubmission } from '../lib/offlineQueue.js'
 
 function ContactPage() {
   const [searchParams] = useSearchParams()
@@ -21,6 +22,9 @@ function ContactPage() {
     message: 'Write when ready.',
   })
   const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [isSendingNewsletter, setIsSendingNewsletter] = useState(false)
+  const newsletterSubmitLockRef = useRef(false)
+  const contactSubmitLockRef = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -58,21 +62,45 @@ function ContactPage() {
     }))
   }, [directEmail.recipientOfficerId, officers])
 
-  const handleNewsletterSubmit = (event) => {
+  const handleNewsletterSubmit = async (event) => {
     event.preventDefault()
-    const email = event.currentTarget.email.value.trim()
-    if (!email) return
+    if (newsletterSubmitLockRef.current) return
+    newsletterSubmitLockRef.current = true
+    const form = event.currentTarget
+    const email = form.email.value.trim()
+    if (!email) {
+      newsletterSubmitLockRef.current = false
+      return
+    }
 
-    createNewsletter(email)
-      .then((result) => {
-        setIsSubscribed(true)
-        setUnsubscribeUrl(result.unsubscribeUrl || '')
-        event.currentTarget.reset()
-      })
-      .catch(() => {
+    const submissionKey = createSubmissionKey('newsletter')
+
+    try {
+      setIsSendingNewsletter(true)
+      const result = await createNewsletter({ email, submissionKey })
+      setIsSubscribed(true)
+      setUnsubscribeUrl(result.unsubscribeUrl || (result.duplicate ? unsubscribeUrl : ''))
+      form.reset()
+    } catch (error) {
+      if (isRetryableSubmissionError(error)) {
+        queuePendingSubmission({
+          kind: 'newsletter',
+          submissionKey,
+          payload: { email },
+          label: 'Temple letters signup',
+        })
         setIsSubscribed(false)
         setUnsubscribeUrl('')
-      })
+        form.reset()
+        return
+      }
+
+      setIsSubscribed(false)
+      setUnsubscribeUrl('')
+    } finally {
+      newsletterSubmitLockRef.current = false
+      setIsSendingNewsletter(false)
+    }
   }
 
   const handleDirectEmailChange = (event) => {
@@ -82,15 +110,22 @@ function ContactPage() {
 
   const handleDirectEmailSubmit = async (event) => {
     event.preventDefault()
+    if (contactSubmitLockRef.current) return
+    contactSubmitLockRef.current = true
+    const submissionKey = createSubmissionKey('contact')
     const payload = {
       name: directEmail.name.trim(),
       email: directEmail.email.trim(),
       subject: directEmail.subject.trim(),
       message: directEmail.message.trim(),
       recipientOfficerId: directEmail.recipientOfficerId.trim(),
+      submissionKey,
     }
 
-    if (!payload.name || !payload.email || !payload.message) return
+    if (!payload.name || !payload.email || !payload.message) {
+      contactSubmitLockRef.current = false
+      return
+    }
 
     try {
       setIsSendingEmail(true)
@@ -125,11 +160,33 @@ function ContactPage() {
         recipientOfficerId: 'all',
       })
     } catch (error) {
+      if (isRetryableSubmissionError(error)) {
+        queuePendingSubmission({
+          kind: 'contact-message',
+          submissionKey,
+          payload,
+          label: 'Contact message',
+        })
+        setEmailStatus({
+          type: 'success',
+          message: 'Saved offline. It will send when the connection returns.',
+        })
+        setDirectEmail({
+          name: '',
+          email: '',
+          subject: '',
+          message: '',
+          recipientOfficerId: 'all',
+        })
+        return
+      }
+
       setEmailStatus({
         type: 'error',
         message: error.message || 'Please try again later.',
       })
     } finally {
+      contactSubmitLockRef.current = false
       setIsSendingEmail(false)
     }
   }
@@ -193,7 +250,7 @@ function ContactPage() {
                         required
                       />
                       <button type="submit" className="btn btn-primary">
-                        Receive
+                        {isSendingNewsletter ? 'Saving...' : 'Receive'}
                       </button>
                     </div>
                   </div>

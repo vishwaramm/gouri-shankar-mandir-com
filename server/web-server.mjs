@@ -3,6 +3,7 @@ import process from 'node:process'
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, resolve, normalize } from 'node:path'
+import { createRequestObserver } from './site-api.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_ROOT = resolve(__dirname, '..')
@@ -45,6 +46,28 @@ function stripHtml(value = '') {
     .replace(/\n\s+/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim()
+}
+
+function sendJson(response, statusCode, payload) {
+  response.statusCode = statusCode
+  response.setHeader('Content-Type', 'application/json')
+  response.setHeader('Cache-Control', 'no-store')
+  response.setHeader('Pragma', 'no-cache')
+  response.end(JSON.stringify(payload))
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 1500) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function getOrigin(request) {
@@ -274,7 +297,7 @@ async function serveStaticFile(response, filePath) {
   response.end(data)
 }
 
-async function proxyApi(request, response) {
+async function proxyApi(request, response, requestId) {
   const targetUrl = `${API_BASE_URL}${request.url}`
   const headers = new Headers()
   for (const [key, value] of Object.entries(request.headers)) {
@@ -282,6 +305,7 @@ async function proxyApi(request, response) {
     if (key === 'host' || key === 'connection' || key === 'content-length') continue
     headers.set(key, Array.isArray(value) ? value.join(', ') : String(value))
   }
+  headers.set('x-request-id', requestId)
 
   const upstream = await fetch(targetUrl, {
     method: request.method,
@@ -304,9 +328,55 @@ async function proxyApi(request, response) {
 async function handleRequest(request, response) {
   const parsedUrl = new URL(request.url, 'http://localhost')
   const pathname = parsedUrl.pathname
+  const observer = createRequestObserver({ request, response, service: 'web', route: pathname })
+  const { requestId } = observer
+
+  if (pathname === '/healthz') {
+    const templateReady = await fileExists(TEMPLATE_PATH)
+    sendJson(response, 200, {
+      ok: true,
+      service: 'web',
+      status: 'ok',
+      requestId,
+      uptimeMs: Date.now() - observer.startedAt,
+      templateReady,
+    })
+    return
+  }
+
+  if (pathname === '/readyz') {
+    const templateReady = await fileExists(TEMPLATE_PATH)
+    let apiReady = false
+    let apiStatus = 0
+
+    try {
+      const upstream = await fetchWithTimeout(`${API_BASE_URL}/api/readyz`, {
+        headers: { 'x-request-id': requestId },
+      })
+      apiStatus = upstream.status
+      apiReady = upstream.ok
+    } catch {
+      apiReady = false
+      apiStatus = 0
+    }
+
+    const ready = templateReady && apiReady
+    sendJson(response, ready ? 200 : 503, {
+      ok: ready,
+      service: 'web',
+      status: ready ? 'ready' : 'not_ready',
+      requestId,
+      uptimeMs: Date.now() - observer.startedAt,
+      templateReady,
+      apiReady,
+      apiStatus,
+      ready,
+    })
+    return
+  }
 
   if (pathname.startsWith('/api/')) {
-    await proxyApi(request, response)
+    await proxyApi(request, response, requestId)
     return
   }
 

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
+import PasswordField from '../components/PasswordField.jsx'
 import { resetPassword } from '../lib/siteApi.js'
 
 function AccountResetPasswordPage() {
@@ -80,30 +81,22 @@ function AccountResetPasswordPage() {
               </div>
             ) : (
               <form className="d-grid gap-3" onSubmit={handleSubmit}>
-                <div>
-                  <label className="form-label fw-semibold">New password</label>
-                  <input
-                    type="password"
-                    className="form-control"
-                    value={passwords.password}
-                    onChange={(event) => setPasswords((current) => ({ ...current, password: event.target.value }))}
-                    autoComplete="new-password"
-                    placeholder="At least 8 characters"
-                  />
-                </div>
-                <div>
-                  <label className="form-label fw-semibold">Confirm password</label>
-                  <input
-                    type="password"
-                    className="form-control"
-                    value={passwords.confirmPassword}
-                    onChange={(event) =>
-                      setPasswords((current) => ({ ...current, confirmPassword: event.target.value }))
-                    }
-                    autoComplete="new-password"
-                    placeholder="Repeat the new password"
-                  />
-                </div>
+                <PasswordField
+                  label="New password"
+                  value={passwords.password}
+                  onChange={(event) => setPasswords((current) => ({ ...current, password: event.target.value }))}
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                />
+                <PasswordField
+                  label="Confirm password"
+                  value={passwords.confirmPassword}
+                  onChange={(event) =>
+                    setPasswords((current) => ({ ...current, confirmPassword: event.target.value }))
+                  }
+                  autoComplete="new-password"
+                  placeholder="Repeat the new password"
+                />
                 <div className="d-flex flex-wrap gap-3">
                   <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={busy}>
                     {busy ? 'Updating...' : 'Update password'}

@@ -6,9 +6,11 @@ import {
   createCommunityEvent,
   deleteCommunityEvent,
   loadPriestAuthStatus,
+  loadApiMetrics,
   loadSiteData,
   deleteContactMessage,
   markContactMessageRead,
+  resolveOperationalAlert,
   replyContactMessage,
   markServiceRequestCompleted,
   processServiceCancellation,
@@ -18,8 +20,13 @@ import {
 } from '../lib/siteApi.js'
 import {
   AdminAccessRequestsPanel,
+  AdminAuditLogPanel,
+  ApiMetricsPanel,
+  CommunityRsvpsPanel,
   ContactMessagesPanel,
+  ClientErrorLogPanel,
   OrderEventLogPanel,
+  SiteAnalyticsPanel,
   TempleLettersPanel,
   SquareSyncPanel,
   ServiceRequestCard,
@@ -46,8 +53,17 @@ function PriestToolsPage() {
   const [adminAccessRequests, setAdminAccessRequests] = useState([])
   const [adminUsers, setAdminUsers] = useState([])
   const [newsletters, setNewsletters] = useState([])
+  const [rsvps, setRsvps] = useState([])
   const [communityEvents, setCommunityEvents] = useState([])
+  const [blogPosts, setBlogPosts] = useState([])
   const [contactMessages, setContactMessages] = useState([])
+  const [adminAuditEvents, setAdminAuditEvents] = useState([])
+  const [clientErrorEvents, setClientErrorEvents] = useState([])
+  const [analyticsSnapshot, setAnalyticsSnapshot] = useState(null)
+  const [apiMetrics, setApiMetrics] = useState(null)
+  const [metricsBusy, setMetricsBusy] = useState(false)
+  const [metricsError, setMetricsError] = useState('')
+  const [resolvingAlertById, setResolvingAlertById] = useState({})
   const [adminPermissions, setAdminPermissions] = useState({
     role: 'staff',
     isSuperAdmin: false,
@@ -88,13 +104,12 @@ function PriestToolsPage() {
     return sortedRequests.filter((item) => ['cancel_requested', 'refund_requested'].includes(item.serviceStatus))
   }, [sortedRequests])
   const sentCount = sortedRequests.filter((item) => item.paymentPageSentAt).length
-  const paidCount = sortedRequests.filter((item) => item.paymentReceivedAt).length
-  const completedCount = sortedRequests.filter((item) => item.serviceCompletedAt).length
   const refundCount = sortedRequests.filter((item) => item.refundedAt).length
-  const cancelledCount = sortedRequests.filter((item) => item.cancelledAt).length
   const supportCount = supportRequests.length
   const newsletterCount = newsletters.length
   const communityEventCount = communityEvents.length
+  const rsvpCount = rsvps.length
+  const [activeTab, setActiveTab] = useState('overview')
 
   const getSupportLabel = (request) => {
     if (request.serviceStatus === 'refund_requested') return 'Refund requested'
@@ -121,8 +136,13 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setRsvps(Array.isArray(data.rsvps) ? data.rsvps : [])
       setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setBlogPosts(Array.isArray(data.blogPosts) ? data.blogPosts : [])
       setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
+      setAdminAuditEvents(Array.isArray(data.adminAuditEvents) ? data.adminAuditEvents : [])
+      setClientErrorEvents(Array.isArray(data.clientErrorEvents) ? data.clientErrorEvents : [])
+      setAnalyticsSnapshot(data.analytics || null)
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
       setAdminPermissions(
@@ -157,11 +177,27 @@ function PriestToolsPage() {
     }
   }, [navigate])
 
+  const refreshMetrics = useCallback(async () => {
+    setMetricsBusy(true)
+    setMetricsError('')
+
+    try {
+      const data = await loadApiMetrics()
+      setApiMetrics(data || null)
+    } catch (fetchError) {
+      setMetricsError(fetchError?.message || 'Unable to load metrics.')
+      setApiMetrics(null)
+    } finally {
+      setMetricsBusy(false)
+    }
+  }, [])
+
   useEffect(() => {
     refreshAuth()
       .then((status) => {
         if (status.authenticated) {
           refreshRequests()
+          refreshMetrics()
         } else {
           navigate('/priest-review', { replace: true })
         }
@@ -170,7 +206,36 @@ function PriestToolsPage() {
         setAuth({ loading: false, authenticated: false })
         navigate('/priest-review', { replace: true })
       })
-  }, [navigate, refreshAuth, refreshRequests])
+  }, [navigate, refreshAuth, refreshMetrics, refreshRequests])
+
+  useEffect(() => {
+    if (!auth.authenticated) return undefined
+
+    const timer = window.setInterval(() => {
+      void refreshMetrics()
+    }, 60_000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [auth.authenticated, refreshMetrics])
+
+  const handleResolveAlert = useCallback(
+    async (alert) => {
+      if (!alert?.id) return
+
+      setResolvingAlertById((current) => ({ ...current, [alert.id]: true }))
+      try {
+        await resolveOperationalAlert({ alertId: alert.id })
+        await refreshMetrics()
+      } catch (resolveError) {
+        setMetricsError(resolveError?.message || 'Unable to resolve alert.')
+      } finally {
+        setResolvingAlertById((current) => ({ ...current, [alert.id]: false }))
+      }
+    },
+    [refreshMetrics],
+  )
 
   useEffect(() => {
     setAdminProfileDrafts((current) => {
@@ -329,7 +394,9 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setRsvps(Array.isArray(data.rsvps) ? data.rsvps : [])
       setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setBlogPosts(Array.isArray(data.blogPosts) ? data.blogPosts : [])
       setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
@@ -381,7 +448,9 @@ function PriestToolsPage() {
       setRequests(Array.isArray(data.orders) ? data.orders : [])
       setRecentEvents(Array.isArray(data.orderEvents) ? data.orderEvents : [])
       setNewsletters(Array.isArray(data.newsletters) ? data.newsletters : [])
+      setRsvps(Array.isArray(data.rsvps) ? data.rsvps : [])
       setCommunityEvents(Array.isArray(data.communityEvents) ? data.communityEvents : [])
+      setBlogPosts(Array.isArray(data.blogPosts) ? data.blogPosts : [])
       setContactMessages(Array.isArray(data.contactMessages) ? data.contactMessages : [])
       setAdminAccessRequests(Array.isArray(data.adminAccessRequests) ? data.adminAccessRequests : [])
       setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
@@ -476,6 +545,18 @@ function PriestToolsPage() {
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
   }, [contactMessages, currentOfficerId, isSuperAdmin])
   const contactCount = visibleContactMessages.length
+  const dashboardTabs = useMemo(
+    () => [
+      { id: 'overview', label: 'Overview' },
+      { id: 'titles', label: 'Admin titles', count: isSuperAdmin ? adminUsers.length : 0 },
+      { id: 'inbox', label: 'Inbox', count: contactCount + newsletterCount },
+      { id: 'community', label: 'Community', count: communityEventCount + rsvpCount },
+      { id: 'support', label: 'Support', count: supportCount + sortedRequests.length },
+      { id: 'analytics', label: 'Analytics' },
+      { id: 'diagnostics', label: 'Diagnostics' },
+    ],
+    [isSuperAdmin, adminUsers.length, contactCount, newsletterCount, communityEventCount, rsvpCount, supportCount, sortedRequests.length],
+  )
 
   const handleContactReplyDraftChange = (messageId, value) => {
     setContactReplyDrafts((current) => ({
@@ -705,275 +786,298 @@ function PriestToolsPage() {
                 </div>
               </div>
 
-              {isSuperAdmin ? (
-                <div className="surface surface-strong surface-pad mt-4">
-                  <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-                    <div>
-                      <p className="section-kicker mb-2">Admin titles</p>
-                      <h2 className="h4 mb-0">Assign officer titles</h2>
-                    </div>
-                  </div>
-                  <div className="row g-3">
-                    {adminUsers.map((adminProfile) => {
-                      const draft = adminProfileDrafts[adminProfile.id] || {
-                        title: adminProfile.title || '',
-                      }
-
-                      return (
-                        <div className="col-12" key={adminProfile.id}>
-                          <div className="surface surface-soft surface-pad">
-                            <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-                              <div className="blog-composer-head mb-0">
-                                <ProfileAvatar name={adminProfile.name} photoUrl={adminProfile.photoUrl} />
-                                <div>
-                                  <strong>{adminProfile.name}</strong>
-                                  <span>{adminProfile.email}</span>
-                                </div>
-                              </div>
-                              <span className="badge text-bg-light border text-dark">
-                                {adminProfile.isSuperAdmin ? 'Super admin' : 'Admin'}
-                              </span>
-                            </div>
-                            <div className="row g-3 align-items-end">
-                              <div className="col-md-5">
-                                <label className="form-label">Officer title</label>
-                                <input
-                                  type="text"
-                                  className="form-control"
-                                  value={draft.title}
-                                  onChange={(event) =>
-                                    setAdminProfileDrafts((current) => ({
-                                      ...current,
-                                      [adminProfile.id]: {
-                                        ...draft,
-                                        title: event.target.value,
-                                      },
-                                    }))
-                                  }
-                                  placeholder="Temple secretary, event lead, ..."
-                                />
-                              </div>
-                              <div className="col-md-5">
-                                <div className="small text-secondary">
-                                  Use Edit profile for your own photo and credentials. Super admins assign officer titles
-                                  here.
-                                </div>
-                              </div>
-                              <div className="col-md-2 d-grid">
-                                <button
-                                  type="button"
-                                  className="btn btn-primary rounded-pill px-3"
-                                  disabled={Boolean(adminProfileBusyById[adminProfile.id])}
-                                  onClick={() => handleSaveAdminProfile(adminProfile)}
-                                >
-                                  {adminProfileBusyById[adminProfile.id] ? 'Saving...' : 'Save'}
-                                </button>
-                              </div>
-                            </div>
-                            {adminProfileStatusById[adminProfile.id] ? (
-                              <div className="small text-secondary mt-3">{adminProfileStatusById[adminProfile.id]}</div>
-                            ) : null}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              <ContactMessagesPanel
-                messages={visibleContactMessages}
-                currentOfficerId={currentOfficerId}
-                replyDrafts={contactReplyDrafts}
-                replyBusyById={contactReplyBusyById}
-                replyStatusById={contactReplyStatusById}
-                deleteBusyById={contactDeleteBusyById}
-                deleteStatusById={contactDeleteStatusById}
-                readBusyById={contactReadBusyById}
-                readStatusById={contactReadStatusById}
-                onReplyDraftChange={handleContactReplyDraftChange}
-                onMarkRead={handleMarkContactMessageRead}
-                onReply={handleReplyContactMessage}
-                onDelete={handleDeleteContactMessage}
-              />
-
-              <TempleLettersPanel subscribers={newsletters} />
-
-              <CommunityEventsPanel
-                events={communityEvents}
-                saveStatusById={communityEventStatusById}
-                deleteBusyById={communityEventBusyById}
-                deleteStatusById={communityEventStatusById}
-                onSave={handleSaveCommunityEvent}
-                onDelete={handleDeleteCommunityEvent}
-              />
-
-              <div className="row g-3 mt-4">
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Requests</div>
-                    <div className="display-6 mb-0">{sortedRequests.length}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Sent</div>
-                    <div className="display-6 mb-0">{sentCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Paid</div>
-                    <div className="h4 mb-0">{paidCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Completed</div>
-                    <div className="h4 mb-0">{completedCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Refunded</div>
-                    <div className="h4 mb-0">{refundCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Support</div>
-                    <div className="h4 mb-0">{supportCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Messages</div>
-                    <div className="h4 mb-0">{contactCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Letters</div>
-                    <div className="h4 mb-0">{newsletterCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Community</div>
-                    <div className="h4 mb-0">{communityEventCount}</div>
-                  </div>
-                </div>
-                <div className="col-sm-4">
-                  <div className="surface surface-soft surface-pad h-100">
-                    <div className="section-kicker mb-2">Cancelled</div>
-                    <div className="h4 mb-0">{cancelledCount}</div>
-                  </div>
-                </div>
+              <div className="site-dashboard-tabs mt-4">
+                {dashboardTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={activeTab === tab.id ? 'site-dashboard-tab is-active' : 'site-dashboard-tab'}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    <span>{tab.label}</span>
+                    {typeof tab.count === 'number' ? <span className="site-dashboard-tab-count">{tab.count}</span> : null}
+                  </button>
+                ))}
               </div>
 
-              {adminPermissions.canViewSquareSync ? (
-                <details className="surface surface-soft surface-pad mt-4">
-                  <summary className="h6 mb-0 cursor-pointer">Diagnostics</summary>
-                  <div className="mt-3">
-                    <SquareSyncPanel
-                      syncStatus={syncStatus}
-                      syncBusy={syncBusy}
-                      syncMessage={syncMessage}
-                      onSync={handleSyncSquare}
-                    />
+              {activeTab === 'overview' ? (
+                <>
+                  <div className="surface surface-soft surface-pad mt-4">
+                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+                      <div>
+                        <p className="section-kicker mb-2">Overview</p>
+                        <h2 className="h4 mb-0">Operational summary</h2>
+                      </div>
+                    </div>
+                    <div className="row g-3">
+                      <div className="col-12 col-lg-6">
+                        <div className="surface surface-soft surface-pad h-100">
+                          <div className="small text-secondary mb-2">Dashboard status</div>
+                          <div className="fw-semibold">Live data is available in the Diagnostics tab.</div>
+                        </div>
+                      </div>
+                      <div className="col-12 col-lg-6">
+                        <div className="surface surface-soft surface-pad h-100">
+                          <div className="small text-secondary mb-2">Current focus</div>
+                          <div className="fw-semibold">Manage officers, inbox, community events, and support work from here.</div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </details>
+                </>
               ) : null}
 
-              {adminPermissions.canViewAdminAccessRequests ? (
-                <AdminAccessRequestsPanel requests={adminAccessRequests} />
+              {activeTab === 'titles' ? (
+                <div className="surface surface-strong surface-pad mt-4">
+                  {isSuperAdmin ? (
+                    <>
+                      <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                        <div>
+                          <p className="section-kicker mb-2">Admin titles</p>
+                          <h2 className="h4 mb-0">Assign officer titles</h2>
+                        </div>
+                      </div>
+                      <div className="row g-3">
+                        {adminUsers.map((adminProfile) => {
+                          const draft = adminProfileDrafts[adminProfile.id] || {
+                            title: adminProfile.title || '',
+                          }
+
+                          return (
+                            <div className="col-12" key={adminProfile.id}>
+                              <div className="surface surface-soft surface-pad">
+                                <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                                  <div className="blog-composer-head mb-0">
+                                    <ProfileAvatar name={adminProfile.name} photoUrl={adminProfile.photoUrl} />
+                                    <div>
+                                      <strong>{adminProfile.name}</strong>
+                                      <span>{adminProfile.email}</span>
+                                    </div>
+                                  </div>
+                                  <span className="badge text-bg-light border text-dark">
+                                    {adminProfile.isSuperAdmin ? 'Super admin' : 'Admin'}
+                                  </span>
+                                </div>
+                                <div className="row g-3 align-items-end">
+                                  <div className="col-md-5">
+                                    <label className="form-label">Officer title</label>
+                                    <input
+                                      type="text"
+                                      className="form-control"
+                                      value={draft.title}
+                                      onChange={(event) =>
+                                        setAdminProfileDrafts((current) => ({
+                                          ...current,
+                                          [adminProfile.id]: {
+                                            ...draft,
+                                            title: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      placeholder="Temple secretary, event lead, ..."
+                                    />
+                                  </div>
+                                  <div className="col-md-5">
+                                    <div className="small text-secondary">
+                                      Use Edit profile for your own photo and credentials. Super admins assign officer titles
+                                      here.
+                                    </div>
+                                  </div>
+                                  <div className="col-md-2 d-grid">
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary rounded-pill px-3"
+                                      disabled={Boolean(adminProfileBusyById[adminProfile.id])}
+                                      onClick={() => handleSaveAdminProfile(adminProfile)}
+                                    >
+                                      {adminProfileBusyById[adminProfile.id] ? 'Saving...' : 'Save'}
+                                    </button>
+                                  </div>
+                                </div>
+                                {adminProfileStatusById[adminProfile.id] ? (
+                                  <div className="small text-secondary mt-3">{adminProfileStatusById[adminProfile.id]}</div>
+                                ) : null}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="surface surface-soft surface-pad">
+                      Admin title editing is available to super admins only.
+                    </div>
+                  )}
+                </div>
               ) : null}
-              <OrderEventLogPanel events={recentEvents} />
+
+              {activeTab === 'inbox' ? (
+                <>
+                  <ContactMessagesPanel
+                    messages={visibleContactMessages}
+                    currentOfficerId={currentOfficerId}
+                    replyDrafts={contactReplyDrafts}
+                    replyBusyById={contactReplyBusyById}
+                    replyStatusById={contactReplyStatusById}
+                    deleteBusyById={contactDeleteBusyById}
+                    deleteStatusById={contactDeleteStatusById}
+                    readBusyById={contactReadBusyById}
+                    readStatusById={contactReadStatusById}
+                    onReplyDraftChange={handleContactReplyDraftChange}
+                    onMarkRead={handleMarkContactMessageRead}
+                    onReply={handleReplyContactMessage}
+                    onDelete={handleDeleteContactMessage}
+                  />
+                  <TempleLettersPanel subscribers={newsletters} />
+                </>
+              ) : null}
+
+              {activeTab === 'community' ? (
+                <>
+                  <CommunityEventsPanel
+                    events={communityEvents}
+                    saveStatusById={communityEventStatusById}
+                    deleteBusyById={communityEventBusyById}
+                    deleteStatusById={communityEventStatusById}
+                    onSave={handleSaveCommunityEvent}
+                    onDelete={handleDeleteCommunityEvent}
+                  />
+                  <CommunityRsvpsPanel rsvps={rsvps} />
+                </>
+              ) : null}
+
+              {activeTab === 'support' ? (
+                <>
+                  <div className="surface surface-pad mt-4">
+                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                      <div>
+                        <p className="section-kicker mb-2">Support queue</p>
+                        <h2 className="h4 mb-0">Open cancellation and refund requests</h2>
+                      </div>
+                      <div className="d-flex flex-wrap gap-2 align-items-center">
+                        <span className="badge text-bg-warning text-dark">{supportCount} open</span>
+                        <span className="badge text-bg-light border text-dark">{refundCount} refunded</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {supportRequests.length ? (
+                    <div className="row g-4 mb-4 mt-0">
+                      {supportRequests.map((request) => (
+                        <SupportRequestCard
+                          key={`support-${request.id || `${request.createdAt}-${request.email}`}`}
+                          request={request}
+                          supportLabel={getSupportLabel(request)}
+                          refundBusy={Boolean(refundBusyById[request.id])}
+                          cancellationBusy={Boolean(cancellationBusyById[request.id])}
+                          refundStatus={refundStatusById[request.id] || ''}
+                          cancellationStatus={cancellationStatusById[request.id] || ''}
+                          orderSyncBusy={Boolean(orderSyncBusyById[request.id])}
+                          orderSyncStatus={orderSyncStatusById[request.id] || ''}
+                          onOpenRecord={() => navigate(`/order/${encodeURIComponent(request.orderCode || request.id || '')}`)}
+                          onProcessRefund={() => handleProcessRefund(request)}
+                          onProcessCancellation={() => handleProcessCancellation(request)}
+                          onSyncOrder={() => handleSyncOrder(request)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="surface surface-pad mt-4">No open support requests.</div>
+                  )}
+
+                  <div className="surface surface-pad mt-4">
+                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                      <div>
+                        <p className="section-kicker mb-2">Service requests</p>
+                        <h2 className="h4 mb-0">Incoming requests</h2>
+                      </div>
+                      <div className="d-flex flex-wrap gap-2 align-items-center">
+                        <span className="badge text-bg-secondary">{sortedRequests.length} requests</span>
+                        <span className="badge text-bg-light border text-dark">{sentCount} sent</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {error ? <div className="alert alert-danger mt-4">{error}</div> : null}
+                  {loading ? <div className="surface surface-pad mt-4">Loading requests...</div> : null}
+
+                  {!loading && sortedRequests.length === 0 ? (
+                    <div className="surface surface-pad mt-4">No service requests yet.</div>
+                  ) : null}
+
+                  <div className="row g-4 mt-0">
+                    {sortedRequests.map((request) => (
+                      <ServiceRequestCard
+                        key={request.id || `${request.createdAt}-${request.email}`}
+                        request={request}
+                        completionBusy={Boolean(completionBusyById[request.id])}
+                        refundBusy={Boolean(refundBusyById[request.id])}
+                        completionStatus={completionStatusById[request.id] || ''}
+                        refundStatus={refundStatusById[request.id] || ''}
+                        orderSyncBusy={Boolean(orderSyncBusyById[request.id])}
+                        orderSyncStatus={orderSyncStatusById[request.id] || ''}
+                        onMarkComplete={() => handleMarkComplete(request)}
+                        onProcessRefund={() => handleProcessRefund(request)}
+                        onSyncOrder={() => handleSyncOrder(request)}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === 'analytics' ? (
+                <SiteAnalyticsPanel
+                  orders={sortedRequests}
+                  newsletters={newsletters}
+                  rsvps={rsvps}
+                  communityEvents={communityEvents}
+                  contactMessages={contactMessages}
+                  blogPosts={blogPosts}
+                  analytics={analyticsSnapshot}
+                />
+              ) : null}
+
+              {activeTab === 'diagnostics' ? (
+                <>
+                  {adminPermissions.canViewSquareSync ? (
+                    <details className="surface surface-soft surface-pad mt-4">
+                      <summary className="h6 mb-0 cursor-pointer">Square sync</summary>
+                      <div className="mt-3">
+                        <SquareSyncPanel
+                          syncStatus={syncStatus}
+                          syncBusy={syncBusy}
+                          syncMessage={syncMessage}
+                          onSync={handleSyncSquare}
+                        />
+                      </div>
+                    </details>
+                  ) : null}
+
+                  {adminPermissions.canViewAdminAccessRequests ? (
+                    <AdminAccessRequestsPanel requests={adminAccessRequests} />
+                  ) : null}
+                  {adminPermissions.isSuperAdmin ? (
+                    <>
+                      <ApiMetricsPanel
+                        metrics={apiMetrics}
+                        onRefresh={refreshMetrics}
+                        refreshBusy={metricsBusy}
+                        refreshError={metricsError}
+                        onResolveAlert={handleResolveAlert}
+                        resolvingAlertIds={resolvingAlertById}
+                      />
+                      <AdminAuditLogPanel events={adminAuditEvents} />
+                      <ClientErrorLogPanel errors={clientErrorEvents} />
+                    </>
+                  ) : null}
+                  <OrderEventLogPanel events={recentEvents} />
+                </>
+              ) : null}
+
             </div>
           ) : null}
         </div>
       </section>
-
-      {!auth.loading && auth.authenticated ? (
-        <section className="pb-5">
-          <div className="container-xxl">
-            <div className="surface surface-pad mb-4">
-              <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
-                <div>
-                  <p className="section-kicker mb-2">Support queue</p>
-                  <h2 className="h4 mb-0">Open cancellation and refund requests</h2>
-                </div>
-                <div className="d-flex flex-wrap gap-2 align-items-center">
-                  <span className="badge text-bg-warning text-dark">{supportCount} open</span>
-                  <span className="badge text-bg-light border text-dark">{refundCount} refunded</span>
-                </div>
-              </div>
-            </div>
-
-            {supportRequests.length ? (
-              <div className="row g-4 mb-4">
-                {supportRequests.map((request) => (
-                  <SupportRequestCard
-                    key={`support-${request.id || `${request.createdAt}-${request.email}`}`}
-                    request={request}
-                    supportLabel={getSupportLabel(request)}
-                    refundBusy={Boolean(refundBusyById[request.id])}
-                    cancellationBusy={Boolean(cancellationBusyById[request.id])}
-                    refundStatus={refundStatusById[request.id] || ''}
-                    cancellationStatus={cancellationStatusById[request.id] || ''}
-                    orderSyncBusy={Boolean(orderSyncBusyById[request.id])}
-                    orderSyncStatus={orderSyncStatusById[request.id] || ''}
-                    onOpenRecord={() => navigate(`/order/${encodeURIComponent(request.orderCode || request.id || '')}`)}
-                    onProcessRefund={() => handleProcessRefund(request)}
-                    onProcessCancellation={() => handleProcessCancellation(request)}
-                    onSyncOrder={() => handleSyncOrder(request)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="surface surface-pad mb-4">No open support requests.</div>
-            )}
-
-            <div className="surface surface-pad mb-4">
-              <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
-                <div>
-                  <p className="section-kicker mb-2">Service requests</p>
-                  <h2 className="h4 mb-0">Incoming requests</h2>
-                </div>
-                <div className="d-flex flex-wrap gap-2 align-items-center">
-                  <span className="badge text-bg-secondary">{sortedRequests.length} requests</span>
-                  <span className="badge text-bg-light border text-dark">{sentCount} sent</span>
-                </div>
-              </div>
-            </div>
-
-            {error ? <div className="alert alert-danger">{error}</div> : null}
-            {loading ? <div className="surface surface-pad">Loading requests...</div> : null}
-
-            {!loading && sortedRequests.length === 0 ? (
-              <div className="surface surface-pad">No service requests yet.</div>
-            ) : null}
-
-            <div className="row g-4 mt-0">
-              {sortedRequests.map((request) => (
-                  <ServiceRequestCard
-                  key={request.id || `${request.createdAt}-${request.email}`}
-                  request={request}
-                  completionBusy={Boolean(completionBusyById[request.id])}
-                  refundBusy={Boolean(refundBusyById[request.id])}
-                  completionStatus={completionStatusById[request.id] || ''}
-                  refundStatus={refundStatusById[request.id] || ''}
-                  orderSyncBusy={Boolean(orderSyncBusyById[request.id])}
-                  orderSyncStatus={orderSyncStatusById[request.id] || ''}
-                  onMarkComplete={() => handleMarkComplete(request)}
-                  onProcessRefund={() => handleProcessRefund(request)}
-                  onSyncOrder={() => handleSyncOrder(request)}
-                />
-              ))}
-            </div>
-          </div>
-        </section>
-      ) : null}
     </main>
   )
 }

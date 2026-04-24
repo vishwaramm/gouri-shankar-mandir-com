@@ -143,6 +143,30 @@ function hasEmbeddedMedia(html = '') {
   return /<(img|iframe)\b/i.test(String(html || ''))
 }
 
+function normalizeSearchText(value = '') {
+  return String(value || '').toLowerCase().trim()
+}
+
+function postMatchesQuery(post, query = '') {
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return true
+
+  const author = post.author || {}
+  const haystack = [
+    post.title,
+    post.body,
+    post.bodyHtml,
+    author.name,
+    author.title,
+    post.approvalStatus,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  return haystack.includes(normalizedQuery)
+}
+
 const BlockEmbed = Quill.import('blots/block/embed')
 
 class LinkPreviewBlot extends BlockEmbed {
@@ -483,6 +507,8 @@ function BlogPage() {
   const [editorKey, setEditorKey] = useState(0)
   const [showPreview, setShowPreview] = useState(false)
   const [previewLoadingCount, setPreviewLoadingCount] = useState(0)
+  const [blogQuery, setBlogQuery] = useState('')
+  const [blogFilter, setBlogFilter] = useState('all')
 
   useEffect(() => {
     let cancelled = false
@@ -597,6 +623,17 @@ function BlogPage() {
       return post.authorId === adminUser?.id
     })
   }, [adminPosts, adminUser?.id, isPriestAdmin, isSuperAdmin])
+  const filteredPosts = useMemo(() => {
+    return posts.filter((post) => {
+      if (blogFilter === 'approved' && post.approvalStatus !== 'approved') return false
+      if (blogFilter === 'pending' && post.approvalStatus === 'approved') return false
+      if (blogFilter === 'media' && !hasEmbeddedMedia(post.bodyHtml)) return false
+      return postMatchesQuery(post, blogQuery)
+    })
+  }, [blogFilter, blogQuery, posts])
+  const filteredPendingPosts = useMemo(() => {
+    return pendingPosts.filter((post) => postMatchesQuery(post, blogQuery))
+  }, [blogQuery, pendingPosts])
   const canPublish =
     Boolean(adminUser?.id) &&
     Boolean(composer.title.trim()) &&
@@ -767,7 +804,7 @@ function BlogPage() {
               <p className="section-intro mb-4">News, teachings, and service notes.</p>
               <div className="blog-mini-stats">
                 <div>
-                  <strong>{posts.length}</strong>
+                  <strong>{filteredPosts.length}</strong>
                   <span>posts</span>
                 </div>
                 <div>
@@ -817,6 +854,41 @@ function BlogPage() {
         <div className="container-xxl">
           <div className="blog-layout">
             <div className="blog-main">
+              <div className="surface surface-soft surface-pad mb-4">
+                <div className="row g-3 align-items-end">
+                  <div className="col-lg-7">
+                    <p className="section-kicker mb-2">Search</p>
+                    <h2 className="h4 mb-0">Filter blog posts.</h2>
+                  </div>
+                  <div className="col-lg-5">
+                    <input
+                      type="search"
+                      className="form-control"
+                      value={blogQuery}
+                      onChange={(event) => setBlogQuery(event.target.value)}
+                      placeholder="Search title, author, or body"
+                    />
+                  </div>
+                </div>
+                <div className="d-flex flex-wrap gap-2 mt-3">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'approved', label: 'Approved' },
+                    { id: 'pending', label: 'Pending' },
+                    { id: 'media', label: 'With media' },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={blogFilter === item.id ? 'btn btn-primary btn-sm rounded-pill' : 'btn btn-outline-light btn-sm rounded-pill'}
+                      onClick={() => setBlogFilter(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {isPriestAdmin ? (
                 <form className="surface surface-strong surface-pad blog-composer mb-4" onSubmit={handlePublish}>
                   <div className="d-flex align-items-center justify-content-between gap-3 mb-3">
@@ -939,7 +1011,7 @@ function BlogPage() {
                 null
               )}
 
-              {isPriestAdmin && pendingPosts.length ? (
+              {isPriestAdmin && filteredPendingPosts.length ? (
                 <div className="surface surface-strong surface-pad blog-approval-queue mb-4">
                   <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
                     <div>
@@ -948,11 +1020,11 @@ function BlogPage() {
                         {isSuperAdmin ? 'Pending approvals' : 'Your posts waiting for approval'}
                       </h2>
                     </div>
-                    <span className="badge text-bg-light border text-dark">{pendingPosts.length} pending</span>
+                    <span className="badge text-bg-light border text-dark">{filteredPendingPosts.length} pending</span>
                   </div>
 
                   <div className="d-grid gap-3">
-                    {pendingPosts.map((post) => {
+                    {filteredPendingPosts.map((post) => {
                       const author = post.author || officers.find((item) => item.id === post.authorId) || officers[0]
                       const canApprovePost = isSuperAdmin && post.approvalStatus !== 'approved'
 
@@ -1079,17 +1151,17 @@ function BlogPage() {
                   </div>
                 ) : null}
 
-                {feedLoaded && !feedStatus && posts.length === 0 ? (
+                {feedLoaded && !feedStatus && filteredPosts.length === 0 ? (
                   <div className="surface surface-pad blog-composer-locked">
                     <p className="section-kicker">Blog</p>
-                    <h2 className="section-title mb-3">No Posts Yet.</h2>
+                    <h2 className="section-title mb-3">No matching posts.</h2>
                     <p className="section-intro mb-0">
-                      Check back later for new posts.
+                      Try a different search or clear the filters.
                     </p>
                   </div>
                 ) : null}
 
-                {posts.map((post, index) => {
+                {filteredPosts.map((post, index) => {
                   const author = post.author || officers.find((item) => item.id === post.authorId) || officers[0]
                   const canDeletePost = Boolean(
                     adminUser?.id && (post.authorId === adminUser.id || post.authorId === adminUser.officerId),

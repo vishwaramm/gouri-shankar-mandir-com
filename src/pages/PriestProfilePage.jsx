@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { ProfileAvatar } from '../components/ProfileAvatar.jsx'
+import PasswordField from '../components/PasswordField.jsx'
 import {
   loadPriestAuthStatus,
   updateAdminUserCredentials,
@@ -217,36 +218,27 @@ function PriestProfilePage() {
                       placeholder="name@example.com"
                     />
                   </div>
-                  <div className="col-md-6">
-                    <label className="form-label">Current password</label>
-                    <input
-                      type="password"
-                      className="form-control"
-                      value={currentPassword}
-                      onChange={(event) => setCurrentPassword(event.target.value)}
-                      placeholder="Enter your current password"
-                    />
-                  </div>
-                  <div className="col-md-6">
-                    <label className="form-label">New password</label>
-                    <input
-                      type="password"
-                      className="form-control"
-                      value={newPassword}
-                      onChange={(event) => setNewPassword(event.target.value)}
-                      placeholder="Leave blank to keep current password"
-                    />
-                  </div>
-                  <div className="col-md-6">
-                    <label className="form-label">Confirm new password</label>
-                    <input
-                      type="password"
-                      className="form-control"
-                      value={confirmPassword}
-                      onChange={(event) => setConfirmPassword(event.target.value)}
-                      placeholder="Repeat the new password"
-                    />
-                  </div>
+                  <PasswordField
+                    className="col-md-6"
+                    label="Current password"
+                    value={currentPassword}
+                    onChange={(event) => setCurrentPassword(event.target.value)}
+                    placeholder="Enter your current password"
+                  />
+                  <PasswordField
+                    className="col-md-6"
+                    label="New password"
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    placeholder="Leave blank to keep current password"
+                  />
+                  <PasswordField
+                    className="col-md-6"
+                    label="Confirm new password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    placeholder="Repeat the new password"
+                  />
                 </div>
                 <div className="d-flex flex-wrap justify-content-end gap-2 mt-4">
                   <button

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { loadCurrentUser, loginUser } from '../lib/siteApi.js'
+import PasswordField from '../components/PasswordField.jsx'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -99,17 +100,15 @@ function LoginPage() {
                         autoComplete="email"
                       />
                     </div>
-                    <div>
-                      <label className="form-label fw-semibold">Password</label>
-                      <input
-                        type="password"
-                        className="form-control"
-                        value={loginForm.password}
-                        onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
-                        placeholder="Password"
-                        autoComplete="current-password"
-                      />
-                    </div>
+                    <PasswordField
+                      label="Password"
+                      value={loginForm.password}
+                      onChange={(event) =>
+                        setLoginForm((current) => ({ ...current, password: event.target.value }))
+                      }
+                      placeholder="Password"
+                      autoComplete="current-password"
+                    />
                     <div className="d-flex flex-wrap gap-3 align-items-center">
                       <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={busy}>
                         {busy ? 'Signing in...' : 'Log in'}

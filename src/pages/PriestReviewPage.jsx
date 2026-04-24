@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
+import PasswordField from '../components/PasswordField.jsx'
 import { loadPriestAuthStatus, loginPriestAuth, requestPriestAccess } from '../lib/siteApi.js'
 
 function PriestReviewPage() {
@@ -181,19 +182,15 @@ function PriestReviewPage() {
                         />
                       </div>
                     </div>
-                    <div>
-                      <label className="form-label fw-semibold">Password</label>
-                      <input
-                        type="password"
-                        className="form-control"
-                        value={requestForm.password}
-                        onChange={(event) =>
-                          setRequestForm((current) => ({ ...current, password: event.target.value }))
-                        }
-                        placeholder="Create a password"
-                        autoComplete="new-password"
-                      />
-                    </div>
+                    <PasswordField
+                      label="Password"
+                      value={requestForm.password}
+                      onChange={(event) =>
+                        setRequestForm((current) => ({ ...current, password: event.target.value }))
+                      }
+                      placeholder="Create a password"
+                      autoComplete="new-password"
+                    />
                     <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={requestBusy}>
                       {requestBusy ? 'Submitting...' : 'Request approval'}
                     </button>
@@ -231,17 +228,13 @@ function PriestReviewPage() {
                         placeholder="admin@example.com"
                       />
                     </div>
-                    <div>
-                      <label className="form-label fw-semibold">Password</label>
-                      <input
-                        type="password"
-                        className="form-control"
-                        value={loginForm.password}
-                        onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
-                        autoComplete="current-password"
-                        placeholder="Enter password"
-                      />
-                    </div>
+                    <PasswordField
+                      label="Password"
+                      value={loginForm.password}
+                      onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+                      autoComplete="current-password"
+                      placeholder="Enter password"
+                    />
                     <div className="d-flex flex-wrap gap-3">
                       <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={loginBusy}>
                         {loginBusy ? 'Signing in...' : 'Sign in'}

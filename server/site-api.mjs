@@ -76,10 +76,27 @@ const memoryStore = {
   contactMessages: [],
   blogPosts: [],
   blogPostLikes: [],
+  adminAuditEvents: [],
+  clientErrorEvents: [],
+  alerts: [],
   squareWebhookEvents: [],
   adminAccessRequests: [],
   adminUsers: [],
   adminSessions: [],
+}
+
+const apiRuntimeMetrics = {
+  startedAt: Date.now(),
+  totalRequests: 0,
+  clientErrorCount: 0,
+  serverErrorCount: 0,
+  abortedCount: 0,
+  durationTotalMs: 0,
+  maxDurationMs: 0,
+  statusCounts: new Map(),
+  routeCounts: new Map(),
+  recentErrors: [],
+  recentRequests: [],
 }
 
 function escapeHtml(value = '') {
@@ -89,6 +106,439 @@ function escapeHtml(value = '') {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+function getRequestId(request) {
+  const header = request?.headers?.['x-request-id']
+  if (typeof header === 'string' && header.trim()) return header.trim()
+  return randomUUID()
+}
+
+function updateMetricMap(map, key, updater) {
+  const current = map.get(key) || updater()
+  map.set(key, current)
+  return current
+}
+
+function recordApiRequestMetric({
+  route = '',
+  method = 'GET',
+  statusCode = 200,
+  durationMs = 0,
+  requestId = '',
+  aborted = false,
+  errorMessage = '',
+}) {
+  const normalizedRoute = route || '/'
+  const normalizedMethod = method || 'GET'
+  const routeKey = `${normalizedMethod} ${normalizedRoute}`
+  const safeDuration = Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0
+  const safeStatus = Number.isInteger(statusCode) ? statusCode : 0
+
+  apiRuntimeMetrics.totalRequests += 1
+  apiRuntimeMetrics.durationTotalMs += safeDuration
+  apiRuntimeMetrics.maxDurationMs = Math.max(apiRuntimeMetrics.maxDurationMs, safeDuration)
+
+  if (aborted) {
+    apiRuntimeMetrics.abortedCount += 1
+  } else if (safeStatus >= 500) {
+    apiRuntimeMetrics.serverErrorCount += 1
+  } else if (safeStatus >= 400) {
+    apiRuntimeMetrics.clientErrorCount += 1
+  }
+
+  apiRuntimeMetrics.statusCounts.set(safeStatus || 0, (apiRuntimeMetrics.statusCounts.get(safeStatus || 0) || 0) + 1)
+
+  const routeStats = updateMetricMap(apiRuntimeMetrics.routeCounts, routeKey, () => ({
+    count: 0,
+    clientErrors: 0,
+    serverErrors: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+  }))
+  routeStats.count += 1
+  routeStats.totalDurationMs += safeDuration
+  routeStats.maxDurationMs = Math.max(routeStats.maxDurationMs, safeDuration)
+  if (aborted || safeStatus >= 500) {
+    routeStats.serverErrors += 1
+  } else if (safeStatus >= 400) {
+    routeStats.clientErrors += 1
+  }
+
+  if (aborted || safeStatus >= 500) {
+    apiRuntimeMetrics.recentErrors.unshift({
+      requestId,
+      method: normalizedMethod,
+      route: normalizedRoute,
+      statusCode: safeStatus || 0,
+      durationMs: safeDuration,
+      aborted: Boolean(aborted),
+      errorMessage: errorMessage || '',
+      createdAt: new Date().toISOString(),
+    })
+    apiRuntimeMetrics.recentErrors = apiRuntimeMetrics.recentErrors.slice(0, 10)
+  }
+
+  apiRuntimeMetrics.recentRequests.unshift({
+    requestId,
+    method: normalizedMethod,
+    route: normalizedRoute,
+    statusCode: safeStatus || 0,
+    durationMs: safeDuration,
+    aborted: Boolean(aborted),
+    createdAt: new Date().toISOString(),
+  })
+  apiRuntimeMetrics.recentRequests = apiRuntimeMetrics.recentRequests.slice(0, 200)
+}
+
+function getSortedMetricEntries(map, limit = 20) {
+  return [...map.entries()]
+    .sort((left, right) => {
+      const leftValue = typeof left[1] === 'object' && left[1] && 'count' in left[1] ? left[1].count : left[1]
+      const rightValue = typeof right[1] === 'object' && right[1] && 'count' in right[1] ? right[1].count : right[1]
+      return Number(rightValue || 0) - Number(leftValue || 0)
+    })
+    .slice(0, limit)
+}
+
+function getRecentWindowCount(samples, windowMs, predicate = () => true) {
+  const cutoff = Date.now() - windowMs
+  return samples.filter((sample) => {
+    const createdAtMs = new Date(sample.createdAt || 0).getTime()
+    return createdAtMs >= cutoff && predicate(sample)
+  }).length
+}
+
+function buildOperationalAlertDefinitions() {
+  const recentRequests = [...apiRuntimeMetrics.recentRequests]
+
+  const serverErrorBurst = getRecentWindowCount(
+    recentRequests,
+    5 * 60 * 1000,
+    (sample) => Number(sample.statusCode) >= 500,
+  )
+  const clientErrorBurst = getRecentWindowCount(
+    recentRequests,
+    15 * 60 * 1000,
+    (sample) => Number(sample.statusCode) >= 400 && Number(sample.statusCode) < 500,
+  )
+
+  const definitions = []
+
+  if (serverErrorBurst >= 3) {
+    definitions.push({
+      key: 'api_5xx_burst',
+      severity: 'critical',
+      title: 'Server errors are spiking',
+      message: `${serverErrorBurst} server errors were recorded in the last 5 minutes.`,
+      details: {
+        window: '5m',
+        count: serverErrorBurst,
+      },
+    })
+  }
+
+  if (clientErrorBurst >= 25) {
+    definitions.push({
+      key: 'api_4xx_burst',
+      severity: 'warning',
+      title: 'Client errors are elevated',
+      message: `${clientErrorBurst} client errors were recorded in the last 15 minutes.`,
+      details: {
+        window: '15m',
+        count: clientErrorBurst,
+      },
+    })
+  }
+
+  return definitions
+}
+
+async function evaluateOperationalAlerts(db, env) {
+  const activeDefinitions = buildOperationalAlertDefinitions()
+  const activeKeys = new Set(activeDefinitions.map((item) => item.key))
+  const now = new Date().toISOString()
+
+  if (isStrictPersistenceEnabled(env) && !usingMongo) {
+    activeDefinitions.push({
+      key: 'database_unavailable',
+      severity: 'critical',
+      title: 'Database unavailable',
+      message: 'Strict persistence is enabled but MongoDB is not connected.',
+      details: {
+        strictPersistence: true,
+        databaseStatus: usingMongo ? 'connected' : 'memory',
+      },
+    })
+    activeKeys.add('database_unavailable')
+  }
+
+  const openAlerts = await listOperationalAlerts(db, { status: 'open', limit: 50 })
+
+  for (const definition of activeDefinitions) {
+    const existing = openAlerts.find((alert) => alert.key === definition.key)
+    const nextEntry = {
+      id: existing?.id || randomUUID(),
+      key: definition.key,
+      severity: definition.severity,
+      title: definition.title,
+      message: definition.message,
+      details: definition.details,
+      status: 'open',
+      occurrenceCount: existing ? Number(existing.occurrenceCount || 0) + 1 : 1,
+      firstSeenAt: existing?.firstSeenAt || now,
+      lastSeenAt: now,
+      resolvedAt: '',
+      resolvedById: '',
+      resolvedByName: '',
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    }
+
+    await saveOperationalAlert(db, nextEntry)
+  }
+
+  const currentOpenAlerts = await listOperationalAlerts(db, { status: 'open', limit: 50 })
+  for (const alert of currentOpenAlerts) {
+    if (!alert.notifiedAt) {
+      const notification = await notifyOperationalAlertRecipients(db, env, alert, { resolved: false })
+      if (notification.sent || notification.results.every((item) => item?.reason === 'missing_smtp')) {
+        await markOperationalAlertNotified(db, alert.id, {
+          id: 'system',
+          name: 'Automated monitor',
+        })
+      }
+    }
+  }
+
+  for (const alert of openAlerts) {
+    if (!activeKeys.has(alert.key)) {
+      await resolveOperationalAlert(db, alert.key, {
+        id: 'system',
+        name: 'Automated monitor',
+      })
+    }
+  }
+
+  const resolvedAlerts = await listOperationalAlerts(db, { status: 'resolved', limit: 50 })
+  for (const alert of resolvedAlerts) {
+    if (!alert.resolvedNotifiedAt && alert.notifiedAt) {
+      const notification = await notifyOperationalAlertRecipients(db, env, alert, { resolved: true })
+      if (notification.sent || notification.results.every((item) => item?.reason === 'missing_smtp')) {
+        await markOperationalAlertNotified(db, alert.id, {
+          id: 'system',
+          name: 'Automated monitor',
+        }, { resolved: true })
+      }
+    }
+  }
+}
+
+async function markRsvpReminderSent(db, rsvpId, status = '', errorMessage = '') {
+  const sentAt = new Date().toISOString()
+  if (db) {
+    await getRsvpsCollection(db).updateOne(
+      { id: rsvpId },
+      {
+        $set: {
+          reminderSentAt: sentAt,
+          reminderEmailStatus: status,
+          reminderEmailError: errorMessage,
+          updatedAt: sentAt,
+        },
+      },
+    )
+    return
+  }
+
+  memoryStore.rsvps = memoryStore.rsvps.map((item) =>
+    item.id === rsvpId
+      ? {
+          ...item,
+          reminderSentAt: sentAt,
+          reminderEmailStatus: status,
+          reminderEmailError: errorMessage,
+          updatedAt: sentAt,
+        }
+      : item,
+  )
+}
+
+async function evaluateRsvpReminders(db, env) {
+  if (!db) return
+
+  const targetDate = getLocalDateString(addDays(new Date(), 1))
+  const reminders = await getRsvpsCollection(db)
+    .find({
+      eventDate: targetDate,
+      $or: [{ reminderSentAt: '' }, { reminderSentAt: { $exists: false } }],
+      reminderOptIn: { $ne: false },
+    })
+    .toArray()
+
+  if (!reminders.length) return
+
+  for (const rsvp of reminders) {
+    if (!rsvp.userId || !rsvp.email) continue
+    const user = await getUserById(db, rsvp.userId)
+    if (!user || user.notificationPrefs?.eventReminders === false) continue
+
+    const event = await findCommunityEventById(db, rsvp.eventId)
+    if (!event) continue
+
+    const mail = buildEventReminderEmail({ event, rsvp: serializeRsvp(rsvp) })
+    const mailResult = await sendMail(env, {
+      to: normalizeEmail(rsvp.email),
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
+      replyTo: RECIPIENT_EMAIL,
+    })
+
+    if (mailResult.sent || mailResult.reason === 'missing_smtp') {
+      await markRsvpReminderSent(
+        db,
+        rsvp.id,
+        mailResult.reason || 'sent',
+        mailResult.errorMessage || '',
+      )
+    }
+  }
+}
+
+let operationalAlertMonitorStarted = false
+let rsvpReminderMonitorStarted = false
+
+export function startOperationalAlertMonitor(env) {
+  if (operationalAlertMonitorStarted) return
+  operationalAlertMonitorStarted = true
+
+  const run = async () => {
+    try {
+      const db = await getMongoDb(env)
+      if (!db) return
+      await evaluateOperationalAlerts(db, env)
+    } catch (error) {
+      console.error('Operational alert monitor failed:', error)
+    }
+  }
+
+  void run()
+  const timer = setInterval(() => {
+    void run()
+  }, 60_000)
+  timer.unref?.()
+}
+
+export function startRsvpReminderMonitor(env) {
+  if (rsvpReminderMonitorStarted) return
+  rsvpReminderMonitorStarted = true
+
+  const run = async () => {
+    try {
+      const db = await getMongoDb(env)
+      if (!db) return
+      await evaluateRsvpReminders(db, env)
+    } catch (error) {
+      console.error('RSVP reminder monitor failed:', error)
+    }
+  }
+
+  void run()
+  const timer = setInterval(() => {
+    void run()
+  }, 30 * 60_000)
+  timer.unref?.()
+}
+
+export function getApiMetricsSnapshot() {
+  const averageDurationMs = apiRuntimeMetrics.totalRequests
+    ? Math.round(apiRuntimeMetrics.durationTotalMs / apiRuntimeMetrics.totalRequests)
+    : 0
+
+  return {
+    startedAt: new Date(apiRuntimeMetrics.startedAt).toISOString(),
+    uptimeMs: Date.now() - apiRuntimeMetrics.startedAt,
+    totals: {
+      requests: apiRuntimeMetrics.totalRequests,
+      clientErrors: apiRuntimeMetrics.clientErrorCount,
+      serverErrors: apiRuntimeMetrics.serverErrorCount,
+      aborted: apiRuntimeMetrics.abortedCount,
+    },
+    durations: {
+      averageMs: averageDurationMs,
+      maxMs: apiRuntimeMetrics.maxDurationMs,
+    },
+    statusCounts: getSortedMetricEntries(apiRuntimeMetrics.statusCounts, 12).map(([statusCode, count]) => ({
+      statusCode: Number(statusCode),
+      count,
+    })),
+    routes: getSortedMetricEntries(apiRuntimeMetrics.routeCounts, 20).map(([route, stats]) => ({
+      route,
+      count: stats.count,
+      clientErrors: stats.clientErrors,
+      serverErrors: stats.serverErrors,
+      averageDurationMs: stats.count ? Math.round(stats.totalDurationMs / stats.count) : 0,
+      maxDurationMs: stats.maxDurationMs,
+    })),
+    recentErrors: [...apiRuntimeMetrics.recentErrors],
+  }
+}
+
+export function createRequestObserver({ request, response, service = 'api', route = '', extra = {} }) {
+  const requestId = getRequestId(request)
+  if (response && typeof response.setHeader === 'function') {
+    response.setHeader('x-request-id', requestId)
+  }
+
+  const startedAt = Date.now()
+  let finalized = false
+
+  const finalize = (aborted = false) => {
+    if (finalized) return
+    finalized = true
+
+    const durationMs = Date.now() - startedAt
+    const pathname = route || new URL(request.url, 'http://localhost').pathname
+    const statusCode = Number.isInteger(response?.statusCode) ? response.statusCode : aborted ? 499 : 200
+    const payload = {
+      type: 'request',
+      service,
+      requestId,
+      method: request.method || 'GET',
+      path: pathname,
+      statusCode: aborted ? 499 : statusCode,
+      durationMs,
+      aborted: Boolean(aborted),
+      ...extra,
+    }
+
+    if (service === 'api') {
+      recordApiRequestMetric(payload)
+    }
+
+    const line = JSON.stringify({
+      level: payload.statusCode >= 500 || aborted ? 'error' : 'info',
+      ...payload,
+    })
+
+    if (payload.statusCode >= 500 || aborted) {
+      console.error(line)
+    } else {
+      console.info(line)
+    }
+  }
+
+  response.once('finish', () => finalize(false))
+  response.once('close', () => {
+    if (!finalized) finalize(true)
+  })
+
+  return {
+    requestId,
+    startedAt,
+    finalize,
+  }
 }
 
 export function sendJson(response, statusCode, payload) {
@@ -167,6 +617,7 @@ async function getDb(env) {
         await Promise.all([
           db.collection('newsletters').createIndex({ email: 1 }, { unique: true }),
           db.collection('newsletters').createIndex({ unsubscribeTokenHash: 1 }, { unique: true, sparse: true }),
+          db.collection('newsletters').createIndex({ submissionKey: 1 }, { unique: true, sparse: true }),
           db.collection('users').createIndex({ email: 1 }, { unique: true }),
           db.collection('users').createIndex({ createdAt: -1 }),
           db.collection('userSessions').createIndex({ sessionId: 1 }, { unique: true }),
@@ -181,6 +632,7 @@ async function getDb(env) {
           db.collection('orders').createIndex({ canonicalKey: 1 }, { unique: true }),
           db.collection('orders').createIndex({ orderCode: 1 }, { unique: true, sparse: true }),
           db.collection('orders').createIndex({ requestId: 1 }, { unique: true, sparse: true }),
+          db.collection('orders').createIndex({ submissionKey: 1 }, { unique: true, sparse: true }),
           db.collection('orders').createIndex({ donationId: 1 }, { unique: true, sparse: true }),
           db.collection('orders').createIndex({ squarePaymentId: 1 }, { unique: true, sparse: true }),
           db.collection('orders').createIndex({ createdAt: -1 }),
@@ -193,15 +645,26 @@ async function getDb(env) {
           db.collection('paymentLinks').createIndex({ createdAt: -1 }),
           db.collection('paymentLinks').createIndex({ expiresAt: 1 }),
           db.collection('rsvps').createIndex({ createdAt: -1 }),
+          db.collection('rsvps').createIndex({ eventId: 1, signerKey: 1 }, { unique: true, sparse: true }),
+          db.collection('rsvps').createIndex({ userId: 1 }),
+          db.collection('rsvps').createIndex({ eventDate: -1 }),
+          db.collection('rsvps').createIndex({ eventDate: 1, reminderSentAt: 1 }),
           db.collection('communityEvents').createIndex({ createdAt: -1 }),
           db.collection('communityEvents').createIndex({ eventDate: -1 }),
           db.collection('communityEvents').createIndex({ section: 1 }),
           db.collection('communityEvents').createIndex({ kind: 1 }),
           db.collection('contactMessages').createIndex({ createdAt: -1 }),
+          db.collection('contactMessages').createIndex({ submissionKey: 1 }, { unique: true, sparse: true }),
           db.collection('blogPosts').createIndex({ publishedAt: -1 }),
           db.collection('blogPosts').createIndex({ createdAt: -1 }),
           db.collection('blogPostLikes').createIndex({ postId: 1, ipHash: 1 }, { unique: true }),
           db.collection('blogPostLikes').createIndex({ createdAt: -1 }),
+          db.collection('adminAuditEvents').createIndex({ createdAt: -1 }),
+          db.collection('adminAuditEvents').createIndex({ action: 1 }),
+          db.collection('clientErrorEvents').createIndex({ createdAt: -1 }),
+          db.collection('alerts').createIndex({ key: 1, status: 1 }),
+          db.collection('alerts').createIndex({ severity: 1 }),
+          db.collection('alerts').createIndex({ createdAt: -1 }),
           db.collection('squareWebhookEvents').createIndex({ eventId: 1 }, { unique: true }),
           db.collection('adminAccessRequests').createIndex({ tokenHash: 1 }, { unique: true, sparse: true }),
           db.collection('adminAccessRequests').createIndex({ email: 1 }),
@@ -232,6 +695,351 @@ async function getDb(env) {
 
 async function listCollection(db, name) {
   return db.collection(name).find({}).sort({ createdAt: -1 }).limit(20).toArray()
+}
+
+async function buildSiteAnalyticsSnapshot(db) {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const getTimestamp = (item = {}) => item?.publishedAt || item?.updatedAt || item?.createdAt || ''
+  const countByService = (items = []) => {
+    const counts = new Map()
+    items.forEach((item) => {
+      const key = String(item?.service || '').trim()
+      if (!key) return
+      counts.set(key, (counts.get(key) || 0) + 1)
+    })
+    return [...counts.entries()].sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0)).slice(0, 5)
+  }
+
+  if (db) {
+    const [
+      requestTotals,
+      donationTotals,
+      contactTotal,
+      newsletterTotal,
+      rsvpTotal,
+      communityEventList,
+      blogTotal,
+      blogPendingTotal,
+      blogApprovedTotal,
+      requestRecent,
+      donationRecent,
+      contactRecent,
+      newsletterRecent,
+      rsvpRecent,
+      communityRecent,
+      blogRecent,
+      topServices,
+    ] = await Promise.all([
+      db.collection('orders').countDocuments({ requestId: { $exists: true }, donationId: { $exists: false } }),
+      db.collection('orders').countDocuments({ donationId: { $exists: true } }),
+      db.collection('contactMessages').countDocuments({}),
+      db.collection('newsletters').countDocuments({}),
+      db.collection('rsvps').countDocuments({}),
+      listCommunityEvents(db, { includeExpired: false }),
+      db.collection('blogPosts').countDocuments({}),
+      db.collection('blogPosts').countDocuments({ approvalStatus: 'pending' }),
+      db.collection('blogPosts').countDocuments({ approvalStatus: { $ne: 'pending' } }),
+      db.collection('orders').countDocuments({
+        requestId: { $exists: true },
+        donationId: { $exists: false },
+        createdAt: { $gte: thirtyDaysAgo },
+      }),
+      db.collection('orders').countDocuments({
+        donationId: { $exists: true },
+        createdAt: { $gte: thirtyDaysAgo },
+      }),
+      db.collection('contactMessages').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('newsletters').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('rsvps').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('communityEvents').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('blogPosts').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('orders')
+        .aggregate([
+          { $match: { requestId: { $exists: true }, donationId: { $exists: false } } },
+          { $group: { _id: '$service', count: { $sum: 1 } } },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 5 },
+        ])
+        .toArray(),
+    ])
+
+    return {
+      totals: {
+        requests: requestTotals,
+        donations: donationTotals,
+        contactMessages: contactTotal,
+        newsletters: newsletterTotal,
+        rsvps: rsvpTotal,
+        communityEvents: communityEventList.length,
+        blogPosts: blogTotal,
+        blogPending: blogPendingTotal,
+        blogApproved: blogApprovedTotal,
+      },
+      recent30Days: {
+        requests: requestRecent,
+        donations: donationRecent,
+        contactMessages: contactRecent,
+        newsletters: newsletterRecent,
+        rsvps: rsvpRecent,
+        communityEvents: communityRecent,
+        blogPosts: blogRecent,
+      },
+      topServices: topServices.map((item) => ({
+        service: item._id || 'Service',
+        count: Number(item.count || 0),
+      })),
+    }
+  }
+
+  const requestEntries = memoryStore.orders.filter((item) => Boolean(item.requestId) && !item.donationId)
+  const donationEntries = memoryStore.orders.filter((item) => Boolean(item.donationId))
+  const communityEvents = [...memoryStore.communityEvents].filter((entry) => !isExpiredCommunityEvent(entry))
+  const blogPosts = [...memoryStore.blogPosts]
+
+  const countRecent = (items = []) =>
+    items.filter((item) => {
+      const createdAt = new Date(getTimestamp(item)).getTime()
+      return Number.isFinite(createdAt) && createdAt >= new Date(thirtyDaysAgo).getTime()
+    }).length
+
+  return {
+    totals: {
+      requests: requestEntries.length,
+      donations: donationEntries.length,
+      contactMessages: memoryStore.contactMessages.length,
+      newsletters: memoryStore.newsletters.length,
+      rsvps: memoryStore.rsvps.length,
+      communityEvents: communityEvents.length,
+      blogPosts: blogPosts.length,
+      blogPending: blogPosts.filter((item) => String(item.approvalStatus || '') === 'pending').length,
+      blogApproved: blogPosts.filter((item) => String(item.approvalStatus || 'approved') !== 'pending').length,
+    },
+    recent30Days: {
+      requests: countRecent(requestEntries),
+      donations: countRecent(donationEntries),
+      contactMessages: countRecent(memoryStore.contactMessages),
+      newsletters: countRecent(memoryStore.newsletters),
+      rsvps: countRecent(memoryStore.rsvps),
+      communityEvents: countRecent(communityEvents),
+      blogPosts: countRecent(blogPosts),
+    },
+    topServices: countByService(requestEntries).map(([service, count]) => ({
+      service,
+      count: Number(count || 0),
+    })),
+  }
+}
+
+async function findNewsletterBySubmissionKey(db, submissionKey) {
+  const normalizedKey = typeof submissionKey === 'string' ? submissionKey.trim() : ''
+  if (!normalizedKey) return null
+
+  if (db) {
+    return db.collection('newsletters').findOne({ submissionKey: normalizedKey })
+  }
+
+  return memoryStore.newsletters.find((item) => item.submissionKey === normalizedKey) || null
+}
+
+async function findContactMessageBySubmissionKey(db, submissionKey) {
+  const normalizedKey = typeof submissionKey === 'string' ? submissionKey.trim() : ''
+  if (!normalizedKey) return null
+
+  if (db) {
+    return db.collection('contactMessages').findOne({ submissionKey: normalizedKey })
+  }
+
+  return memoryStore.contactMessages.find((item) => item.submissionKey === normalizedKey) || null
+}
+
+async function findOrderBySubmissionKey(db, submissionKey) {
+  const normalizedKey = typeof submissionKey === 'string' ? submissionKey.trim() : ''
+  if (!normalizedKey) return null
+
+  if (db) {
+    return db.collection('orders').findOne({ submissionKey: normalizedKey })
+  }
+
+  return memoryStore.orders.find((item) => item.submissionKey === normalizedKey) || null
+}
+
+async function saveAuditEvent(db, entry) {
+  try {
+    if (db) {
+      await db.collection('adminAuditEvents').insertOne(entry)
+    } else {
+      memoryStore.adminAuditEvents.unshift(entry)
+    }
+  } catch (error) {
+    console.error('Unable to save admin audit event:', error)
+  }
+}
+
+async function saveClientErrorEvent(db, entry) {
+  try {
+    if (db) {
+      await db.collection('clientErrorEvents').insertOne(entry)
+    } else {
+      memoryStore.clientErrorEvents.unshift(entry)
+    }
+  } catch (error) {
+    console.error('Unable to save client error event:', error)
+  }
+}
+
+async function saveOperationalAlert(db, entry) {
+  try {
+    if (db) {
+      const existing = await db.collection('alerts').findOne({ key: entry.key, status: entry.status || 'open' })
+      const existingData = existing ? { ...existing } : {}
+      delete existingData._id
+      await db.collection('alerts').updateOne(
+        { key: entry.key, status: entry.status || 'open' },
+        {
+          $set: {
+            ...existingData,
+            ...entry,
+            notifiedAt: existing?.notifiedAt || entry.notifiedAt || '',
+            notifiedById: existing?.notifiedById || entry.notifiedById || '',
+            notifiedByName: existing?.notifiedByName || entry.notifiedByName || '',
+            resolvedNotifiedAt: existing?.resolvedNotifiedAt || entry.resolvedNotifiedAt || '',
+            resolvedNotifiedById: existing?.resolvedNotifiedById || entry.resolvedNotifiedById || '',
+            resolvedNotifiedByName: existing?.resolvedNotifiedByName || entry.resolvedNotifiedByName || '',
+          },
+          $setOnInsert: { createdAt: entry.createdAt || new Date().toISOString() },
+        },
+        { upsert: true },
+      )
+    } else {
+      const existingIndex = memoryStore.alerts.findIndex(
+        (item) => item.key === entry.key && item.status === (entry.status || 'open'),
+      )
+      if (existingIndex >= 0) {
+        memoryStore.alerts[existingIndex] = {
+          ...memoryStore.alerts[existingIndex],
+          ...entry,
+          notifiedAt: memoryStore.alerts[existingIndex].notifiedAt || entry.notifiedAt || '',
+          notifiedById: memoryStore.alerts[existingIndex].notifiedById || entry.notifiedById || '',
+          notifiedByName: memoryStore.alerts[existingIndex].notifiedByName || entry.notifiedByName || '',
+          resolvedNotifiedAt: memoryStore.alerts[existingIndex].resolvedNotifiedAt || entry.resolvedNotifiedAt || '',
+          resolvedNotifiedById: memoryStore.alerts[existingIndex].resolvedNotifiedById || entry.resolvedNotifiedById || '',
+          resolvedNotifiedByName: memoryStore.alerts[existingIndex].resolvedNotifiedByName || entry.resolvedNotifiedByName || '',
+        }
+      } else {
+        memoryStore.alerts.unshift(entry)
+      }
+    }
+  } catch (error) {
+    console.error('Unable to save operational alert:', error)
+  }
+}
+
+async function listOperationalAlerts(db, { status = '', limit = 20 } = {}) {
+  if (db) {
+    const query = status ? { status } : {}
+    return db.collection('alerts').find(query).sort({ createdAt: -1 }).limit(limit).toArray()
+  }
+
+  return [...memoryStore.alerts]
+    .filter((item) => (status ? item.status === status : true))
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+    .slice(0, limit)
+}
+
+async function resolveOperationalAlert(db, key, resolvedBy = {}) {
+  const now = new Date().toISOString()
+  if (!key) return null
+
+  if (db) {
+    const result = await db.collection('alerts').updateMany(
+      { key, status: 'open' },
+      {
+        $set: {
+          status: 'resolved',
+          resolvedAt: now,
+          resolvedById: resolvedBy.id || '',
+          resolvedByName: resolvedBy.name || '',
+          updatedAt: now,
+        },
+      },
+    )
+    return result.modifiedCount > 0
+  }
+
+  let changed = false
+  memoryStore.alerts = memoryStore.alerts.map((item) => {
+    if (item.key !== key || item.status !== 'open') return item
+    changed = true
+    return {
+      ...item,
+      status: 'resolved',
+      resolvedAt: now,
+      resolvedById: resolvedBy.id || '',
+      resolvedByName: resolvedBy.name || '',
+      updatedAt: now,
+    }
+  })
+  return changed
+}
+
+async function markOperationalAlertNotified(db, alertId, notifiedBy = {}, { resolved = false } = {}) {
+  const now = new Date().toISOString()
+  if (!alertId) return null
+
+  const update = resolved
+    ? {
+        resolvedNotifiedAt: now,
+        resolvedNotifiedById: notifiedBy.id || '',
+        resolvedNotifiedByName: notifiedBy.name || '',
+        updatedAt: now,
+      }
+    : {
+        notifiedAt: now,
+        notifiedById: notifiedBy.id || '',
+        notifiedByName: notifiedBy.name || '',
+        updatedAt: now,
+      }
+
+  if (db) {
+    await db.collection('alerts').updateOne({ id: alertId }, { $set: update })
+    return true
+  }
+
+  const index = memoryStore.alerts.findIndex((item) => item.id === alertId)
+  if (index < 0) return false
+
+  memoryStore.alerts[index] = {
+    ...memoryStore.alerts[index],
+    ...update,
+  }
+  return true
+}
+
+function normalizeAuditAction(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+async function recordAdminAuditEvent(db, currentAdmin, action, details = {}) {
+  if (!currentAdmin?.id || !action) return null
+
+  const entry = {
+    id: randomUUID(),
+    action: normalizeAuditAction(action),
+    actorId: currentAdmin.id,
+    actorName: currentAdmin.name || '',
+    actorEmail: normalizeEmail(currentAdmin.email || ''),
+    actorRole: getAdminRole(currentAdmin),
+    actorOfficerId: currentAdmin.officerId || '',
+    details: typeof details.details === 'string' ? details.details : '',
+    targetType: typeof details.targetType === 'string' ? details.targetType : '',
+    targetId: typeof details.targetId === 'string' ? details.targetId : '',
+    targetLabel: typeof details.targetLabel === 'string' ? details.targetLabel : '',
+    metadata: typeof details.metadata === 'object' && details.metadata ? details.metadata : {},
+    createdAt: new Date().toISOString(),
+  }
+
+  await saveAuditEvent(db, entry)
+  return entry
 }
 
 function normalizeEventDetail(value) {
@@ -375,6 +1183,10 @@ function getCommunityEventsCollection(db) {
   return db.collection('communityEvents')
 }
 
+function getRsvpsCollection(db) {
+  return db.collection('rsvps')
+}
+
 async function readJsonFile(filePath) {
   try {
     const contents = await readFile(filePath, 'utf8')
@@ -477,6 +1289,7 @@ function serializeContactMessage(message) {
 
   return {
     id: message.id || '',
+    submissionKey: message.submissionKey || '',
     name: message.name || '',
     email: message.email || '',
     phone: message.phone || '',
@@ -683,6 +1496,40 @@ function serializeCommunityEvent(entry) {
     latitude: typeof entry.latitude === 'number' ? entry.latitude : null,
     longitude: typeof entry.longitude === 'number' ? entry.longitude : null,
     mapsUrl: entry.mapsUrl || '',
+    createdAt: entry.createdAt || '',
+    updatedAt: entry.updatedAt || '',
+  }
+}
+
+function normalizeRsvpGuestCount(value = 1) {
+  const count = Number(value)
+  if (!Number.isFinite(count)) return 1
+  return Math.min(50, Math.max(1, Math.round(count)))
+}
+
+function serializeRsvp(entry) {
+  if (!entry) return null
+
+  return {
+    id: entry.id || '',
+    eventId: entry.eventId || '',
+    eventTitle: entry.eventTitle || entry.event || '',
+    eventDate: normalizeCommunityEventDate(entry.eventDate || ''),
+    section: normalizeCommunityEventSection(entry.section || ''),
+    kind: normalizeCommunityEventKind(entry.kind || ''),
+    guestCount: normalizeRsvpGuestCount(entry.guestCount || 1),
+    note: entry.note || '',
+    signerKey: entry.signerKey || '',
+    userId: entry.userId || '',
+    userName: entry.userName || '',
+    email: entry.email || '',
+    phone: entry.phone || '',
+    location: entry.location || '',
+    mapsUrl: entry.mapsUrl || '',
+    reminderOptIn: entry.reminderOptIn !== false,
+    reminderSentAt: entry.reminderSentAt || '',
+    reminderEmailStatus: entry.reminderEmailStatus || '',
+    reminderEmailError: entry.reminderEmailError || '',
     createdAt: entry.createdAt || '',
     updatedAt: entry.updatedAt || '',
   }
@@ -1078,6 +1925,113 @@ async function deleteCommunityEventById(db, eventId) {
   const before = memoryStore.communityEvents.length
   memoryStore.communityEvents = memoryStore.communityEvents.filter((item) => item.id !== normalizedEventId)
   return memoryStore.communityEvents.length !== before
+}
+
+async function listUserRsvps(db, user) {
+  if (!user) return []
+
+  if (db) {
+    return getRsvpsCollection(db)
+      .find({ userId: user.id })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .toArray()
+  }
+
+  return memoryStore.rsvps
+    .filter((item) => item.userId === user.id)
+    .sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')))
+}
+
+function getLocalDateString(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDays(date = new Date(), days = 0) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function buildEventReminderEmail({ event, rsvp }) {
+  const eventTitle = event?.title || rsvp?.eventTitle || 'Community event'
+  const eventDate = rsvp?.eventDate || event?.eventDate || ''
+  const location = rsvp?.location || event?.address || ''
+  const mapsUrl = rsvp?.mapsUrl || event?.mapsUrl || ''
+
+  return {
+    subject: `Reminder: ${eventTitle}`,
+    text: [
+      `Namaste ${rsvp?.userName || 'devotee'},`,
+      '',
+      `This is a reminder for: ${eventTitle}`,
+      eventDate ? `Date: ${eventDate}` : '',
+      location ? `Location: ${location}` : '',
+      '',
+      mapsUrl ? `Map: ${mapsUrl}` : '',
+      '',
+      'This reminder was sent because you RSVP’d from your account.',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f1b18">
+        <h2 style="margin: 0 0 12px">Event reminder</h2>
+        <p style="margin: 0 0 8px">Namaste ${escapeHtml(rsvp?.userName || 'devotee')},</p>
+        <p style="margin: 0 0 8px">This is a reminder for:</p>
+        <p style="margin: 0 0 8px"><strong>${escapeHtml(eventTitle)}</strong></p>
+        ${eventDate ? `<p style="margin: 0 0 8px"><strong>Date:</strong> ${escapeHtml(eventDate)}</p>` : ''}
+        ${location ? `<p style="margin: 0 0 8px"><strong>Location:</strong> ${escapeHtml(location)}</p>` : ''}
+        ${mapsUrl ? `<p style="margin: 0 0 12px"><a href="${escapeHtml(mapsUrl)}">Open in Google Maps</a></p>` : ''}
+        <p style="margin: 0">This reminder was sent because you RSVP’d from your account.</p>
+      </div>
+    `,
+  }
+}
+
+async function upsertRsvp(db, entry) {
+  if (db) {
+    const existing = await getRsvpsCollection(db).findOne({
+      eventId: entry.eventId,
+      signerKey: entry.signerKey,
+    })
+
+    if (existing) {
+      const updated = {
+        ...existing,
+        ...entry,
+        id: existing.id || entry.id,
+        createdAt: existing.createdAt || entry.createdAt,
+        updatedAt: entry.updatedAt,
+      }
+      await getRsvpsCollection(db).updateOne({ id: existing.id || entry.id }, { $set: updated })
+      return { entry: updated, created: false }
+    }
+
+    await getRsvpsCollection(db).insertOne(entry)
+    return { entry, created: true }
+  }
+
+  const index = memoryStore.rsvps.findIndex(
+    (item) => item.eventId === entry.eventId && item.signerKey === entry.signerKey,
+  )
+
+  if (index >= 0) {
+    const updated = {
+      ...memoryStore.rsvps[index],
+      ...entry,
+      id: memoryStore.rsvps[index].id || entry.id,
+      createdAt: memoryStore.rsvps[index].createdAt || entry.createdAt,
+      updatedAt: entry.updatedAt,
+    }
+    memoryStore.rsvps[index] = updated
+    return { entry: updated, created: false }
+  }
+
+  memoryStore.rsvps.unshift(entry)
+  return { entry, created: true }
 }
 
 async function recordBlogPostLike(db, request, env, postId) {
@@ -1653,10 +2607,12 @@ async function attachOrdersToUser(db, user) {
 function normalizeNotificationPrefs(input = {}, fallback = {}) {
   const serviceEmails = input.serviceEmails !== undefined ? Boolean(input.serviceEmails) : fallback.serviceEmails !== false
   const templeLetters = input.templeLetters !== undefined ? Boolean(input.templeLetters) : Boolean(fallback.templeLetters)
+  const eventReminders = input.eventReminders !== undefined ? Boolean(input.eventReminders) : fallback.eventReminders !== false
 
   return {
     serviceEmails,
     templeLetters,
+    eventReminders,
   }
 }
 
@@ -1894,6 +2850,85 @@ function buildAdminAccessApprovedEmail({ name }) {
   }
 }
 
+function buildOperationalAlertEmail({ title, message, severity, details, resolved = false, siteUrl = '' }) {
+  const normalizedDetails = details && typeof details === 'object'
+    ? Object.entries(details)
+        .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+        .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+        .join('\n')
+    : ''
+  const dashboardUrl = siteUrl ? `${siteUrl.replace(/\/$/, '')}/priest-tools` : '/priest-tools'
+  const subjectPrefix = resolved ? 'Resolved alert' : 'Alert'
+  return {
+    subject: `${subjectPrefix}: ${title}`,
+    text: [
+      resolved ? 'An operational alert has resolved.' : 'An operational alert was triggered.',
+      '',
+      `Title: ${title}`,
+      `Severity: ${severity || 'warning'}`,
+      `Message: ${message}`,
+      normalizedDetails ? '' : null,
+      normalizedDetails,
+      '',
+      `Dashboard: ${dashboardUrl}`,
+    ].filter(Boolean).join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f1b18">
+        <h2 style="margin: 0 0 12px">${escapeHtml(resolved ? 'Alert resolved' : 'Operational alert')}</h2>
+        <p style="margin: 0 0 8px"><strong>Title:</strong> ${escapeHtml(title)}</p>
+        <p style="margin: 0 0 8px"><strong>Severity:</strong> ${escapeHtml(severity || 'warning')}</p>
+        <p style="margin: 0 0 12px">${escapeHtml(message)}</p>
+        ${normalizedDetails ? `<pre style="margin: 0 0 12px; white-space: pre-wrap; font-family: inherit">${escapeHtml(normalizedDetails)}</pre>` : ''}
+        <p style="margin: 0">
+          Dashboard:
+          <a href="${escapeHtml(dashboardUrl)}">${escapeHtml(dashboardUrl)}</a>
+        </p>
+      </div>
+    `,
+  }
+}
+
+async function notifyOperationalAlertRecipients(db, env, alert, { resolved = false } = {}) {
+  const recipients = await getContactRecipients(db, [], true)
+  const recipientList = recipients.length
+    ? recipients
+    : [
+        {
+          email: RECIPIENT_EMAIL,
+          name: 'Temple team',
+        },
+      ]
+
+  const mail = buildOperationalAlertEmail({
+    title: alert.title || 'Operational alert',
+    message: alert.message || '',
+    severity: alert.severity || 'warning',
+    details: alert.details || {},
+    resolved,
+    siteUrl: getPublicSiteOrigin(env),
+  })
+
+  const results = await Promise.all(
+    recipientList.map((recipient) =>
+      sendMail(env, {
+        to: normalizeEmail(recipient.email || RECIPIENT_EMAIL),
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+        replyTo: RECIPIENT_EMAIL,
+      }),
+    ),
+  )
+
+  const sentCount = results.filter((item) => item?.sent).length
+  return {
+    sentCount,
+    totalCount: results.length,
+    sent: sentCount > 0,
+    results,
+  }
+}
+
 function serializeUser(user) {
   if (!user) return null
   return {
@@ -1904,6 +2939,7 @@ function serializeUser(user) {
     notificationPrefs: {
       serviceEmails: user.notificationPrefs?.serviceEmails !== false,
       templeLetters: Boolean(user.notificationPrefs?.templeLetters),
+      eventReminders: user.notificationPrefs?.eventReminders !== false,
     },
     emailVerifiedAt: user.emailVerifiedAt || '',
     verificationSentAt: user.verificationSentAt || '',
@@ -2096,6 +3132,7 @@ function buildOrderSummaryRecord(request, donation, user) {
     service: order.service,
     status: order.status,
     amountCents: order.amountCents,
+    submissionKey: request?.submissionKey || donation?.submissionKey || '',
     requestId: order.requestId,
     donationId: order.donationId,
     name: order.name,
@@ -2965,6 +4002,185 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
   const db = await getDb(env)
   const usingMongo = Boolean(db)
   const strictPersistence = isStrictPersistenceEnabled(env)
+  const requestId = getRequestId(request)
+
+  if (request.method === 'GET' && pathname === '/api/healthz') {
+    sendJson(response, 200, {
+      ok: true,
+      service: 'api',
+      status: 'ok',
+      requestId,
+      uptimeMs: Date.now() - apiRuntimeMetrics.startedAt,
+      databaseStatus: usingMongo ? 'connected' : 'memory',
+      strictPersistence,
+      nodeVersion: process.version,
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/readyz') {
+    const ready = usingMongo || !strictPersistence
+    sendJson(response, ready ? 200 : 503, {
+      ok: ready,
+      service: 'api',
+      status: ready ? 'ready' : 'not_ready',
+      requestId,
+      uptimeMs: Date.now() - apiRuntimeMetrics.startedAt,
+      databaseStatus: usingMongo ? 'connected' : 'memory',
+      strictPersistence,
+      ready,
+      reason: ready ? '' : 'MongoDB is required but unavailable.',
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/metrics') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    await evaluateOperationalAlerts(db, env)
+    const [openAlerts, recentAlerts] = await Promise.all([
+      listOperationalAlerts(db, { status: 'open', limit: 20 }),
+      listOperationalAlerts(db, { limit: 20 }),
+    ])
+
+    sendJson(response, 200, {
+      ok: true,
+      metrics: getApiMetricsSnapshot(),
+      runtime: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        memoryUsage: process.memoryUsage(),
+      },
+      serviceState: {
+        databaseStatus: usingMongo ? 'connected' : 'memory',
+        strictPersistence,
+        mongoConfigured: Boolean(env.MONGODB_URI?.trim()),
+      },
+      alerts: {
+        open: openAlerts.map((item) => ({ ...item })),
+        recent: recentAlerts.map((item) => ({ ...item })),
+      },
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/priest-auth/alerts') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    await evaluateOperationalAlerts(db, env)
+    const [openAlerts, recentAlerts] = await Promise.all([
+      listOperationalAlerts(db, { status: 'open', limit: 20 }),
+      listOperationalAlerts(db, { limit: 20 }),
+    ])
+
+    sendJson(response, 200, {
+      ok: true,
+      alerts: {
+        open: openAlerts.map((item) => ({ ...item })),
+        recent: recentAlerts.map((item) => ({ ...item })),
+      },
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/priest-auth/alerts/resolve') {
+    if (!(await requirePriestAuth(db, request, response))) return true
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const currentAdmin = await getAuthenticatedPriestUser(db, request)
+    if (!currentAdmin?.id) {
+      sendJson(response, 401, { ok: false, message: 'Admin sign in required.' })
+      return true
+    }
+
+    const body = await readJsonBody(request)
+    const alertId = typeof body.alertId === 'string' ? body.alertId.trim() : ''
+    if (!alertId) {
+      sendJson(response, 400, { ok: false, message: 'Alert id is required.' })
+      return true
+    }
+
+    const existing = usingMongo
+      ? await db.collection('alerts').findOne({ id: alertId })
+      : memoryStore.alerts.find((item) => item.id === alertId) || null
+
+    if (!existing) {
+      sendJson(response, 404, { ok: false, message: 'Alert not found.' })
+      return true
+    }
+
+    const shouldNotifyResolution = Boolean(existing.notifiedAt) && !existing.resolvedNotifiedAt
+    await resolveOperationalAlert(db, existing.key, {
+      id: currentAdmin.id,
+      name: currentAdmin.name || '',
+    })
+
+    if (shouldNotifyResolution) {
+      const notification = await notifyOperationalAlertRecipients(db, env, {
+        ...existing,
+        status: 'resolved',
+      }, {
+        resolved: true,
+      })
+      if (notification.sent || notification.results.every((item) => item?.reason === 'missing_smtp')) {
+        await markOperationalAlertNotified(db, alertId, {
+          id: currentAdmin.id,
+          name: currentAdmin.name || '',
+        }, {
+          resolved: true,
+        })
+      }
+    }
+
+    const refreshed = usingMongo
+      ? await db.collection('alerts').findOne({ id: alertId })
+      : memoryStore.alerts.find((item) => item.id === alertId) || null
+
+    sendJson(response, 200, {
+      ok: true,
+      message: 'Alert resolved.',
+      alert: refreshed ? { ...refreshed } : null,
+    })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/client-errors') {
+    if (!requireSameOrigin(request, env, response)) return true
+
+    const body = await readJsonBody(request)
+    const entry = {
+      id: randomUUID(),
+      requestId,
+      message: typeof body.message === 'string' ? body.message.trim() : '',
+      stack: typeof body.stack === 'string' ? body.stack.trim() : '',
+      source: typeof body.source === 'string' ? body.source.trim() : '',
+      pageUrl: typeof body.pageUrl === 'string' ? body.pageUrl.trim() : '',
+      filename: typeof body.filename === 'string' ? body.filename.trim() : '',
+      lineNumber: Number.isInteger(body.lineNumber) ? body.lineNumber : null,
+      columnNumber: Number.isInteger(body.columnNumber) ? body.columnNumber : null,
+      userAgent: typeof body.userAgent === 'string' ? body.userAgent.trim() : '',
+      createdAt: new Date().toISOString(),
+    }
+
+    await saveClientErrorEvent(db, entry)
+    sendJson(response, 200, { ok: true, message: 'Captured.' })
+    return true
+  }
 
   if (strictPersistence && !usingMongo) {
     sendJson(response, 503, {
@@ -2980,8 +4196,9 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
 
     const currentAdmin = await getAuthenticatedPriestUser(db, request)
     const adminPermissions = getAdminPermissions(currentAdmin)
+    const analytics = await buildSiteAnalyticsSnapshot(db)
 
-    const [newsletters, orders, rsvps, communityEvents, contactMessages, blogPosts, squareWebhookEvents, orderEvents, adminAccessRequests, adminUsers] = usingMongo
+    const [newsletters, orders, rsvps, communityEvents, contactMessages, blogPosts, squareWebhookEvents, orderEvents, adminAccessRequests, adminAuditEvents, clientErrorEvents, adminUsers] = usingMongo
       ? await Promise.all([
           listCollection(db, 'newsletters'),
           listCollection(db, 'orders'),
@@ -2992,6 +4209,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
           listCollection(db, 'squareWebhookEvents'),
           listRecentOrderEvents(db, 25),
           listCollection(db, 'adminAccessRequests'),
+          listCollection(db, 'adminAuditEvents'),
+          listCollection(db, 'clientErrorEvents'),
           db.collection('adminUsers').find({}).sort({ createdAt: -1 }).toArray(),
         ])
       : [
@@ -3004,6 +4223,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
           [...memoryStore.squareWebhookEvents].slice(0, 20),
           [...memoryStore.orderEvents].slice(0, 25),
           [...memoryStore.adminAccessRequests].slice(0, 20),
+          [...memoryStore.adminAuditEvents].slice(0, 20),
+          [...memoryStore.clientErrorEvents].slice(0, 20),
           [...memoryStore.adminUsers],
         ]
 
@@ -3016,8 +4237,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         ...item,
       })),
       rsvps: rsvps.map((item) => ({
-        event: item.event,
-        createdAt: item.createdAt,
+        ...serializeRsvp(item),
       })),
       communityEvents: communityEvents.map((item) => serializeCommunityEvent(item)),
       contactMessages: contactMessages.map((item) => serializeContactMessage(item)),
@@ -3027,6 +4247,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       })),
       adminPermissions,
       adminUsers: adminUsers.map((item) => serializeAdminUser(item)),
+      adminAuditEvents: adminAuditEvents.map((item) => ({
+        ...item,
+      })),
+      clientErrorEvents: clientErrorEvents.map((item) => ({
+        ...item,
+      })),
+      analytics,
       adminAccessRequests: adminPermissions.canViewAdminAccessRequests
         ? adminAccessRequests.map((item) => ({
             id: item.id,
@@ -3152,6 +4379,9 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         db.collection('blogPosts').deleteMany({}),
         db.collection('blogPostLikes').deleteMany({}),
         db.collection('adminAccessRequests').deleteMany({}),
+        db.collection('adminAuditEvents').deleteMany({}),
+        db.collection('clientErrorEvents').deleteMany({}),
+        db.collection('alerts').deleteMany({}),
       ])
     } else {
       memoryStore.newsletters = []
@@ -3168,6 +4398,9 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       memoryStore.blogPosts = []
       memoryStore.blogPostLikes = []
       memoryStore.adminAccessRequests = []
+      memoryStore.adminAuditEvents = []
+      memoryStore.clientErrorEvents = []
+      memoryStore.alerts = []
     }
 
     sendJson(response, 200, { ok: true })
@@ -3223,6 +4456,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       }
       memoryStore.contactMessages[index] = updatedMessage
     }
+
+    await recordAdminAuditEvent(db, currentAdmin, 'contact_message_hidden', {
+      targetType: 'contactMessage',
+      targetId: messageId,
+      targetLabel: updatedMessage?.subject || updatedMessage?.name || 'Contact message',
+      details: 'Message removed from officer inbox.',
+    })
 
     sendJson(response, 200, {
       ok: true,
@@ -3281,6 +4521,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       }
       memoryStore.contactMessages[index] = updatedMessage
     }
+
+    await recordAdminAuditEvent(db, currentAdmin, 'contact_message_read', {
+      targetType: 'contactMessage',
+      targetId: messageId,
+      targetLabel: updatedMessage?.subject || updatedMessage?.name || 'Contact message',
+      details: 'Message marked as read.',
+    })
 
     sendJson(response, 200, {
       ok: true,
@@ -3392,6 +4639,16 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const updatedMessage = usingMongo
       ? await db.collection('contactMessages').findOne({ id: messageId })
       : memoryStore.contactMessages.find((item) => item.id === messageId) || null
+
+    await recordAdminAuditEvent(db, currentAdmin, 'contact_message_replied', {
+      targetType: 'contactMessage',
+      targetId: messageId,
+      targetLabel: contactMessage.subject || contactMessage.name || 'Contact message',
+      details: mailResult.sent ? 'Reply sent to visitor.' : 'Reply saved, but email delivery failed.',
+      metadata: {
+        emailed: mailResult.sent,
+      },
+    })
 
     sendJson(response, 200, {
       ok: true,
@@ -3524,6 +4781,17 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
 
     await saveCommunityEvent(db, entry)
     await pruneExpiredCommunityEvents(db)
+    await recordAdminAuditEvent(db, currentAdmin, eventId ? 'community_event_updated' : 'community_event_created', {
+      targetType: 'communityEvent',
+      targetId: entry.id,
+      targetLabel: entry.title || '',
+      details: eventId ? 'Community event updated.' : 'Community event created.',
+      metadata: {
+        section: entry.section || '',
+        kind: entry.kind || '',
+        eventDate: entry.eventDate || '',
+      },
+    })
 
     const saved = await findCommunityEventById(db, entry.id)
     sendJson(response, 200, {
@@ -3557,6 +4825,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       sendJson(response, 404, { ok: false, message: 'Community event not found.' })
       return true
     }
+
+    await recordAdminAuditEvent(db, currentAdmin, 'community_event_deleted', {
+      targetType: 'communityEvent',
+      targetId: eventId,
+      targetLabel: 'Community event',
+      details: 'Community event deleted.',
+    })
 
     sendJson(response, 200, { ok: true, message: 'Community event deleted.', eventId })
     return true
@@ -3625,6 +4900,16 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     }
 
     await saveBlogPost(db, entry)
+    await recordAdminAuditEvent(db, currentAdmin, 'blog_post_created', {
+      targetType: 'blogPost',
+      targetId: entry.id,
+      targetLabel: entry.title,
+      details: isSuperAdmin ? 'Blog post published immediately.' : 'Blog post submitted for approval.',
+      metadata: {
+        approvalStatus: entry.approvalStatus,
+        authorRole: entry.authorRole,
+      },
+    })
 
     sendJson(response, 200, {
       ok: true,
@@ -3703,6 +4988,16 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       }
     }
 
+    await recordAdminAuditEvent(db, currentAdmin, 'blog_post_approved', {
+      targetType: 'blogPost',
+      targetId: postId,
+      targetLabel: blogPost.title || '',
+      details: 'Blog post approved.',
+      metadata: {
+        approvalCount: updated.approvalCount,
+      },
+    })
+
     sendJson(response, 200, {
       ok: true,
       message: 'Post approved.',
@@ -3776,6 +5071,13 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       return true
     }
 
+    await recordAdminAuditEvent(db, currentAdmin, 'blog_post_deleted', {
+      targetType: 'blogPost',
+      targetId: postId,
+      targetLabel: post.title || '',
+      details: 'Blog post deleted.',
+    })
+
     sendJson(response, 200, {
       ok: true,
       message: 'Post deleted.',
@@ -3787,6 +5089,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
   if (request.method === 'POST' && pathname === '/api/newsletters') {
     const body = await readJsonBody(request)
     const email = normalizeEmail(body.email)
+    const submissionKey = typeof body.submissionKey === 'string' ? body.submissionKey.trim() : ''
 
     if (!email) {
       sendJson(response, 400, { ok: false, message: 'Email is required.' })
@@ -3798,36 +5101,61 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const unsubscribeTokenHash = hashSecret(unsubscribeToken)
     const entry = {
       email,
+      submissionKey,
       createdAt: now,
       unsubscribeTokenHash,
     }
 
+    const existing = usingMongo
+      ? await db.collection('newsletters').findOne(
+          submissionKey ? { $or: [{ email }, { submissionKey }] } : { email },
+        )
+      : (submissionKey
+          ? memoryStore.newsletters.find((item) => item.email === email || item.submissionKey === submissionKey)
+          : memoryStore.newsletters.find((item) => item.email === email)) || null
+
     if (usingMongo) {
-      await db.collection('newsletters').updateOne(
-        { email },
-        {
-          $setOnInsert: { email, createdAt: now },
-          $set: { unsubscribeTokenHash },
-        },
-        { upsert: true },
-      )
-    } else if (!memoryStore.newsletters.some((item) => item.email === email)) {
-      memoryStore.newsletters.unshift(entry)
-    } else {
+      if (existing) {
+        await db.collection('newsletters').updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              email,
+              submissionKey: submissionKey || existing.submissionKey || '',
+              unsubscribeTokenHash: existing.unsubscribeTokenHash || unsubscribeTokenHash,
+              createdAt: existing.createdAt || now,
+            },
+          },
+        )
+      } else {
+        await db.collection('newsletters').insertOne(entry)
+      }
+    } else if (existing) {
       memoryStore.newsletters = memoryStore.newsletters.map((item) =>
-        item.email === email ? { ...item, unsubscribeTokenHash } : item,
+        item.email === email || (submissionKey && item.submissionKey === submissionKey)
+          ? {
+              ...item,
+              email,
+              submissionKey: submissionKey || item.submissionKey || '',
+              unsubscribeTokenHash: item.unsubscribeTokenHash || unsubscribeTokenHash,
+            }
+          : item,
       )
+    } else {
+      memoryStore.newsletters.unshift(entry)
     }
 
     const siteOrigin = getPublicSiteOrigin(env, request)
     sendJson(response, 200, {
       ok: true,
-      message: 'Received.',
+      message: existing ? 'Already subscribed.' : 'Received.',
       entry: {
         email,
         createdAt: now,
+        submissionKey,
       },
-      unsubscribeUrl: `${siteOrigin}/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`,
+      duplicate: Boolean(existing),
+      unsubscribeUrl: existing ? '' : `${siteOrigin}/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`,
     })
     return true
   }
@@ -3899,6 +5227,30 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         totalOrders: orders.length,
         inProgress: orders.filter((order) => order.type === 'service' && order.isInProgress).length,
         completed: orders.filter((order) => order.status === 'completed').length,
+      },
+    })
+    return true
+  }
+
+  if (request.method === 'GET' && pathname === '/api/users/rsvps') {
+    const user = await loadUserForRequest(db, request)
+    if (!user) {
+      sendJson(response, 401, { ok: false, message: 'Unauthorized.' })
+      return true
+    }
+
+    const fullUser = await getUserById(db, user.id)
+    const rsvps = await listUserRsvps(db, fullUser || user)
+    sendJson(response, 200, {
+      ok: true,
+      user,
+      rsvps: rsvps.map((item) => serializeRsvp(item)),
+      summary: {
+        totalRsvps: rsvps.length,
+        upcomingRsvps: rsvps.filter((item) => {
+          const eventDate = normalizeCommunityEventDate(item.eventDate || '')
+          return eventDate ? new Date(`${eventDate}T23:59:59`).getTime() >= Date.now() : true
+        }).length,
       },
     })
     return true
@@ -4236,6 +5588,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       notificationPrefs: normalizeNotificationPrefs(body.notificationPrefs, {
         serviceEmails: true,
         templeLetters: false,
+        eventReminders: true,
       }),
       emailVerifiedAt: '',
       verificationSentAt: now,
@@ -4926,6 +6279,17 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       }
     }
 
+    await recordAdminAuditEvent(db, currentAdmin, isSelfEdit ? 'admin_title_self_updated' : 'admin_title_updated', {
+      targetType: 'adminUser',
+      targetId: targetAdmin.id,
+      targetLabel: targetAdmin.name || '',
+      details: 'Admin title updated.',
+      metadata: {
+        title: nextTitle,
+        selfEdit: isSelfEdit,
+      },
+    })
+
     const refreshedAdmin = await getAdminUserById(db, targetAdmin.id)
     sendJson(response, 200, {
       ok: true,
@@ -5005,6 +6369,17 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     } else {
       Object.assign(currentAdmin, updates)
     }
+
+    await recordAdminAuditEvent(db, currentAdmin, 'admin_credentials_updated', {
+      targetType: 'adminUser',
+      targetId: currentAdmin.id,
+      targetLabel: currentAdmin.name || '',
+      details: nextPassword ? 'Admin credentials updated.' : 'Admin email updated.',
+      metadata: {
+        email: nextEmail,
+        passwordChanged: Boolean(nextPassword),
+      },
+    })
 
     sendJson(response, 200, {
       ok: true,
@@ -5086,6 +6461,16 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       await deleteManagedAdminPhoto(previousPhotoUrl)
     }
 
+    await recordAdminAuditEvent(db, currentAdmin, 'admin_photo_updated', {
+      targetType: 'adminUser',
+      targetId: currentAdmin.id,
+      targetLabel: currentAdmin.name || '',
+      details: 'Admin profile photo updated.',
+      metadata: {
+        photoUrl: nextPhotoUrl,
+      },
+    })
+
     const refreshedAdmin = await getAdminUserById(db, currentAdmin.id)
     sendJson(response, 200, {
       ok: true,
@@ -5123,8 +6508,8 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
   if (request.method === 'POST' && pathname === '/api/service-requests') {
     const body = await readJsonBody(request)
     const currentUser = await getAuthenticatedUser(db, request)
-    const id = randomUUID()
-    const orderCode = generateOrderCode()
+    const submissionKey = typeof body.submissionKey === 'string' ? body.submissionKey.trim() : ''
+    const existingRequest = await findOrderBySubmissionKey(db, submissionKey)
     const service = typeof body.service === 'string' ? body.service.trim() : ''
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     const email = normalizeEmail(body.email)
@@ -5133,6 +6518,30 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const location = typeof body.location === 'string' ? body.location.trim() : ''
     const requestMode = typeof body.requestMode === 'string' ? body.requestMode.trim().toLowerCase() : 'virtual'
     const note = typeof body.note === 'string' ? body.note.trim() : ''
+
+    if (existingRequest) {
+      const trackUrl = existingRequest.orderCode ? buildOrderLookupUrl(env, request, existingRequest.orderCode, existingRequest.email || '') : ''
+      sendJson(response, 200, {
+        ok: true,
+        message: 'Received.',
+        duplicate: true,
+        emailed: false,
+        mailStatus: 'duplicate',
+        mailError: '',
+        confirmationEmailSent: false,
+        confirmationMailStatus: 'duplicate',
+        confirmationMailError: '',
+        orderCode: existingRequest.orderCode || '',
+        trackUrl,
+        entry: {
+          ...existingRequest,
+        },
+      })
+      return true
+    }
+
+    const id = randomUUID()
+    const orderCode = generateOrderCode()
 
     if (!service || !name || !email || !note) {
       sendJson(response, 400, { ok: false, message: 'Service, name, email, and note are required.' })
@@ -5149,6 +6558,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       location,
       requestMode,
       note,
+      submissionKey,
       reviewedAt: '',
       paymentPageSentAt: '',
       paymentPageAmountCents: 0,
@@ -5264,6 +6674,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       confirmationMailError,
       orderCode,
       trackUrl: buildOrderLookupUrl(env, request, orderCode, email),
+      duplicate: false,
       entry,
     })
     return true
@@ -6307,26 +7718,67 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
   }
 
   if (request.method === 'POST' && pathname === '/api/rsvps') {
-    const body = await readJsonBody(request)
-    const event = typeof body.event === 'string' ? body.event.trim() : ''
+    if (!requireSameOrigin(request, env, response)) return true
 
-    if (!event) {
+    const body = await readJsonBody(request)
+    const currentUser = await getAuthenticatedUser(db, request)
+    if (!currentUser?.id) {
+      sendJson(response, 401, { ok: false, message: 'Sign in to RSVP.' })
+      return true
+    }
+
+    const eventId = typeof body.eventId === 'string' ? body.eventId.trim() : ''
+    const eventTitle = typeof body.eventTitle === 'string' ? body.eventTitle.trim() : typeof body.event === 'string' ? body.event.trim() : ''
+    const note = typeof body.note === 'string' ? body.note.trim() : ''
+    const guestCount = normalizeRsvpGuestCount(body.guestCount || 1)
+    const reminderOptIn = body.reminderOptIn !== false
+    const location = typeof body.location === 'string' ? body.location.trim() : ''
+    const mapsUrl = typeof body.mapsUrl === 'string' ? body.mapsUrl.trim() : ''
+
+    if (!eventId) {
       sendJson(response, 400, { ok: false, message: 'Event is required.' })
       return true
     }
 
+    const event = await findCommunityEventById(db, eventId)
+    if (!event) {
+      sendJson(response, 404, { ok: false, message: 'Event not found.' })
+      return true
+    }
+
+    const now = new Date().toISOString()
     const entry = {
-      event,
-      createdAt: new Date().toISOString(),
+      id: randomUUID(),
+      eventId: event.id || eventId,
+      eventTitle: eventTitle || event.title || '',
+      eventDate: normalizeCommunityEventDate(event.eventDate || ''),
+      section: normalizeCommunityEventSection(event.section || ''),
+      kind: normalizeCommunityEventKind(event.kind || ''),
+      guestCount,
+      note,
+      signerKey: `user:${currentUser.id}`,
+      userId: currentUser.id,
+      userName: currentUser.name || '',
+      email: normalizeEmail(currentUser.email),
+      phone: currentUser.phone || '',
+      location: location || event.address || '',
+      mapsUrl: mapsUrl || event.mapsUrl || '',
+      reminderOptIn,
+      reminderSentAt: '',
+      reminderEmailStatus: '',
+      reminderEmailError: '',
+      createdAt: now,
+      updatedAt: now,
     }
 
-    if (usingMongo) {
-      await db.collection('rsvps').insertOne(entry)
-    } else {
-      memoryStore.rsvps.unshift(entry)
-    }
+    const { entry: savedEntry, created } = await upsertRsvp(db, entry)
 
-    sendJson(response, 200, { ok: true, message: 'Received.', entry })
+    sendJson(response, 200, {
+      ok: true,
+      message: created ? 'RSVP saved.' : 'RSVP updated.',
+      entry: serializeRsvp(savedEntry),
+      created,
+    })
     return true
   }
 
@@ -6346,6 +7798,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
     const phone = typeof body.phone === 'string' ? body.phone.trim() : ''
     const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
     const message = typeof body.message === 'string' ? body.message.trim() : ''
+    const submissionKey = typeof body.submissionKey === 'string' ? body.submissionKey.trim() : ''
     const recipientOfficerId = typeof body.recipientOfficerId === 'string' ? body.recipientOfficerId.trim() : ''
     const recipientOfficerIds = Array.isArray(body.recipientOfficerIds)
       ? body.recipientOfficerIds.map((item) => normalizeOfficerId(item)).filter(Boolean)
@@ -6363,8 +7816,25 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       return true
     }
 
+    const existingMessage = await findContactMessageBySubmissionKey(db, submissionKey)
+    if (existingMessage) {
+      sendJson(response, 200, {
+        ok: true,
+        message: 'Received.',
+        duplicate: true,
+        emailed: false,
+        mailStatus: 'duplicate',
+        mailError: '',
+        emailedCount: 0,
+        recipientCount: recipients.length,
+        entry: serializeContactMessage(existingMessage),
+      })
+      return true
+    }
+
     const entry = {
       id: randomUUID(),
+      submissionKey,
       name,
       email,
       phone,
@@ -6430,6 +7900,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       mailError,
       emailedCount: sentCount,
       recipientCount: recipients.length,
+      duplicate: false,
       entry,
     })
     return true
@@ -6441,6 +7912,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
 function createMiddleware(env) {
   return async (request, response, next) => {
     const pathname = new URL(request.url, 'http://localhost').pathname
+    createRequestObserver({ request, response, service: 'api', route: pathname })
 
     if (!pathname.startsWith('/api/')) {
       next()

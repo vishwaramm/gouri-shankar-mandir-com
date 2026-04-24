@@ -1,8 +1,24 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { legalLinks, navItems } from '../content.js'
 import { applySeoForPath } from '../lib/seo.js'
-import { loadCurrentUser, loadPriestAuthStatus, logoutPriestAuth, logoutUser } from '../lib/siteApi.js'
+import {
+  createContactMessage,
+  createNewsletter,
+  createRsvp,
+  createServiceRequest,
+  loadCurrentUser,
+  loadPriestAuthStatus,
+  loadOperationalAlerts,
+  logoutPriestAuth,
+  logoutUser,
+  reportClientError,
+} from '../lib/siteApi.js'
+import {
+  flushPendingSubmissions,
+  loadPendingSubmissions,
+  subscribePendingSubmissionChanges,
+} from '../lib/offlineQueue.js'
 
 function SiteLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -16,10 +32,14 @@ function SiteLayout() {
     loading: true,
     authenticated: false,
   })
+  const [openAlertCount, setOpenAlertCount] = useState(0)
+  const [isOnline, setIsOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine !== false)
+  const [pendingSubmissionCount, setPendingSubmissionCount] = useState(0)
   const accountMenuRef = useRef(null)
   const accountToggleRef = useRef(null)
   const adminMenuRef = useRef(null)
   const adminToggleRef = useRef(null)
+  const reportedClientErrorsRef = useRef(new Set())
   const location = useLocation()
   const year = new Date().getFullYear()
   const onAdminRoute = location.pathname === '/priest-review' || location.pathname.startsWith('/priest-')
@@ -34,6 +54,39 @@ function SiteLayout() {
     return `site-link ${featuredClass} ${isActive ? 'is-active' : ''}`.trim()
   }
 
+  const refreshPendingSubmissionCount = useCallback(() => {
+    setPendingSubmissionCount(loadPendingSubmissions().length)
+  }, [])
+
+  const flushPendingSubmissionsNow = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+
+    await flushPendingSubmissions({
+      newsletter: async (entry) =>
+        createNewsletter({
+          ...entry.payload,
+          submissionKey: entry.submissionKey,
+        }),
+      'contact-message': async (entry) =>
+        createContactMessage({
+          ...entry.payload,
+          submissionKey: entry.submissionKey,
+        }),
+      'service-request': async (entry) =>
+        createServiceRequest({
+          ...entry.payload,
+          submissionKey: entry.submissionKey,
+        }),
+      rsvp: async (entry) =>
+        createRsvp({
+          ...entry.payload,
+          submissionKey: entry.submissionKey,
+        }),
+    })
+
+    refreshPendingSubmissionCount()
+  }, [refreshPendingSubmissionCount])
+
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [location.pathname])
@@ -41,6 +94,116 @@ function SiteLayout() {
   useEffect(() => {
     applySeoForPath(location.pathname, location.search)
   }, [location.pathname, location.search])
+
+  useEffect(() => {
+    refreshPendingSubmissionCount()
+    const unsubscribe = subscribePendingSubmissionChanges(refreshPendingSubmissionCount)
+
+    const updateNetworkState = () => {
+      setIsOnline(typeof navigator === 'undefined' ? true : navigator.onLine !== false)
+    }
+
+    updateNetworkState()
+    const handleOnline = () => {
+      updateNetworkState()
+      void flushPendingSubmissionsNow()
+    }
+    const handleOffline = () => {
+      updateNetworkState()
+      refreshPendingSubmissionCount()
+    }
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    void flushPendingSubmissionsNow()
+
+    const retryTimer = window.setInterval(() => {
+      if (loadPendingSubmissions().length) {
+        void flushPendingSubmissionsNow()
+      }
+    }, 60_000)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+      window.clearInterval(retryTimer)
+    }
+  }, [flushPendingSubmissionsNow, refreshPendingSubmissionCount])
+
+  useEffect(() => {
+    const reportOnce = (payload) => {
+      const key = [
+        payload.message || '',
+        payload.stack || '',
+        payload.source || '',
+        payload.pageUrl || '',
+        payload.filename || '',
+        payload.lineNumber || '',
+        payload.columnNumber || '',
+      ].join('|')
+
+      if (reportedClientErrorsRef.current.has(key)) return
+      reportedClientErrorsRef.current.add(key)
+      if (reportedClientErrorsRef.current.size > 25) {
+        const values = [...reportedClientErrorsRef.current]
+        reportedClientErrorsRef.current = new Set(values.slice(-25))
+      }
+
+      void reportClientError(payload)
+    }
+
+    const handleError = (event) => {
+      if (!event) return
+      const error = event.error
+      const message =
+        typeof event.message === 'string' && event.message.trim()
+          ? event.message.trim()
+          : error?.message || 'Unhandled error'
+
+      if (!message) return
+
+      reportOnce({
+        message,
+        stack: error?.stack || '',
+        source: 'window.error',
+        pageUrl: window.location.href,
+        filename: typeof event.filename === 'string' ? event.filename : '',
+        lineNumber: Number.isInteger(event.lineno) ? event.lineno : null,
+        columnNumber: Number.isInteger(event.colno) ? event.colno : null,
+        userAgent: navigator.userAgent,
+      })
+    }
+
+    const handleRejection = (event) => {
+      const reason = event?.reason
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : typeof reason === 'string'
+            ? reason
+            : reason?.message || 'Unhandled promise rejection'
+
+      reportOnce({
+        message,
+        stack: reason instanceof Error ? reason.stack || '' : typeof reason?.stack === 'string' ? reason.stack : '',
+        source: 'unhandledrejection',
+        pageUrl: window.location.href,
+        filename: '',
+        lineNumber: null,
+        columnNumber: null,
+        userAgent: navigator.userAgent,
+      })
+    }
+
+    window.addEventListener('error', handleError)
+    window.addEventListener('unhandledrejection', handleRejection)
+
+    return () => {
+      window.removeEventListener('error', handleError)
+      window.removeEventListener('unhandledrejection', handleRejection)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -151,6 +314,36 @@ function SiteLayout() {
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const refreshAlerts = async () => {
+      if (!adminState.authenticated) {
+        if (!cancelled) setOpenAlertCount(0)
+        return
+      }
+
+      try {
+        const data = await loadOperationalAlerts()
+        if (cancelled) return
+        const openAlerts = Array.isArray(data?.alerts?.open) ? data.alerts.open : []
+        setOpenAlertCount(openAlerts.length)
+      } catch {
+        if (!cancelled) setOpenAlertCount(0)
+      }
+    }
+
+    void refreshAlerts()
+    const timer = window.setInterval(() => {
+      void refreshAlerts()
+    }, 60_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [adminState.authenticated, location.pathname, location.search])
+
   const handleLogout = async () => {
     await logoutUser()
     setAccountState({ loading: false, user: null })
@@ -170,7 +363,42 @@ function SiteLayout() {
 
   return (
     <div className="site-shell d-flex min-vh-100 flex-column">
+      <a
+        className="site-skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          const target = document.getElementById('main-content')
+          if (!target) return
+          event.preventDefault()
+          target.focus()
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }}
+      >
+        Skip to content
+      </a>
       <header className="site-header">
+        {!isOnline || pendingSubmissionCount > 0 ? (
+          <div className="site-network-banner" role="status" aria-live="polite">
+            <div className="container-xxl d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div>
+                <strong>{isOnline ? 'Pending sync' : 'Offline mode'}</strong>
+                <span className="ms-2">
+                  {!isOnline
+                    ? 'Forms will be saved locally and sent when the connection returns.'
+                    : `${pendingSubmissionCount} queued submission${pendingSubmissionCount === 1 ? '' : 's'} will sync automatically.`}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline-light btn-sm rounded-pill px-3"
+                onClick={() => void flushPendingSubmissionsNow()}
+                disabled={!pendingSubmissionCount}
+              >
+                Retry now
+              </button>
+            </div>
+          </div>
+        ) : null}
         <nav className="site-nav">
           <div className="container-xxl d-flex flex-wrap align-items-center gap-3">
             <NavLink to="/" className="brand-lockup text-decoration-none">
@@ -186,7 +414,7 @@ function SiteLayout() {
               className="site-toggle ms-auto"
               aria-expanded={mobileNavOpen}
               aria-controls="primary-links"
-              aria-label="Toggle navigation"
+              aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
               onClick={() => setMobileNavOpen((current) => !current)}
             >
               <span aria-hidden="true">
@@ -207,13 +435,22 @@ function SiteLayout() {
               ))}
 
               {onAdminRoute || adminState.authenticated || accountState.user ? null : (
-                <NavLink
-                  to="/sign-up"
-                  onClick={() => setMobileNavOpen(false)}
-                  className="site-link site-link-cta site-link-cta-mobile"
-                >
-                  Sign Up
-                </NavLink>
+                <>
+                  <NavLink
+                    to="/login"
+                    onClick={() => setMobileNavOpen(false)}
+                    className="site-link site-link-cta site-link-cta-mobile"
+                  >
+                    Log In
+                  </NavLink>
+                  <NavLink
+                    to="/sign-up"
+                    onClick={() => setMobileNavOpen(false)}
+                    className="site-link site-link-cta site-link-cta-mobile site-link-cta-primary"
+                  >
+                    Sign Up
+                  </NavLink>
+                </>
               )}
             </div>
 
@@ -224,14 +461,15 @@ function SiteLayout() {
                     <div className="site-account-loading text-secondary">Admin</div>
                   ) : (
                     <>
-                      <button
-                        type="button"
-                        className="site-account-toggle"
-                        ref={adminToggleRef}
-                        aria-expanded={adminMenuOpen}
-                        aria-haspopup="menu"
-                        onClick={() => setAdminMenuOpen((current) => !current)}
-                      >
+                        <button
+                          type="button"
+                          className="site-account-toggle"
+                          ref={adminToggleRef}
+                          aria-expanded={adminMenuOpen}
+                          aria-haspopup="menu"
+                          aria-label={adminMenuOpen ? 'Close admin menu' : 'Open admin menu'}
+                          onClick={() => setAdminMenuOpen((current) => !current)}
+                        >
                         <span className="site-account-avatar" aria-hidden="true">
                           A
                         </span>
@@ -240,6 +478,11 @@ function SiteLayout() {
                           <span>Private tools</span>
                         </span>
                       </button>
+                      {openAlertCount > 0 ? (
+                        <NavLink to="/priest-tools" onClick={() => setAdminMenuOpen(false)} className="site-admin-alert-badge">
+                          {openAlertCount} open alert{openAlertCount === 1 ? '' : 's'}
+                        </NavLink>
+                      ) : null}
                       <div className={adminMenuOpen ? 'site-account-menu is-open' : 'site-account-menu'}>
                         <NavLink
                           to="/priest-tools"
@@ -296,6 +539,7 @@ function SiteLayout() {
                         ref={accountToggleRef}
                         aria-expanded={accountMenuOpen}
                         aria-haspopup="menu"
+                        aria-label={accountMenuOpen ? 'Close account menu' : 'Open account menu'}
                         onClick={() => setAccountMenuOpen((current) => !current)}
                       >
                         <span className="site-account-avatar" aria-hidden="true">
@@ -336,13 +580,22 @@ function SiteLayout() {
                       </div>
                     </>
                   ) : (
-                    <NavLink
-                      to="/sign-up"
-                      onClick={() => setMobileNavOpen(false)}
-                      className="btn btn-primary rounded-pill nav-cta"
-                    >
-                      Sign Up
-                    </NavLink>
+                    <div className="site-auth-actions">
+                      <NavLink
+                        to="/login"
+                        onClick={() => setMobileNavOpen(false)}
+                        className="site-auth-link"
+                      >
+                        Log In
+                      </NavLink>
+                      <NavLink
+                        to="/sign-up"
+                        onClick={() => setMobileNavOpen(false)}
+                        className="btn btn-primary rounded-pill nav-cta"
+                      >
+                        Sign Up
+                      </NavLink>
+                    </div>
                   )}
                 </div>
               )}
@@ -351,7 +604,9 @@ function SiteLayout() {
         </nav>
       </header>
 
-      <Outlet />
+      <div id="main-content" className="site-main-content" tabIndex={-1}>
+        <Outlet />
+      </div>
 
       <footer className="site-footer">
         <div className="container-xxl section-block">
@@ -362,6 +617,11 @@ function SiteLayout() {
                 Prayer, learning, and satsang.
               </h3>
               <p className="section-intro mb-4">Temple life shaped for prayer, study, and gathering.</p>
+              <div className="mb-4">
+                <NavLink to="/admin" className="btn btn-primary rounded-pill px-4">
+                  Admin Login
+                </NavLink>
+              </div>
               <p className="mb-0 text-secondary">{year} Gourishankar Mandir.</p>
             </div>
 
@@ -378,11 +638,8 @@ function SiteLayout() {
               <p className="section-kicker mb-3">Visit</p>
               <div className="d-flex flex-column gap-2">
                 {navItems.slice(1).map((item) => (
-                  <NavLink key={item.path} className="journey-link" to={item.path}>
-                    <div>
-                      <h3>{item.label}</h3>
-                    </div>
-                    <span className="journey-arrow">↗</span>
+                  <NavLink key={item.path} className="footer-text-link" to={item.path}>
+                    {item.label}
                   </NavLink>
                 ))}
               </div>
@@ -392,30 +649,13 @@ function SiteLayout() {
               <p className="section-kicker mb-3">Legal</p>
               <div className="d-flex flex-column gap-2">
                 {legalLinks.map((item) => (
-                  <NavLink key={item.path} className="journey-link" to={item.path}>
-                    <div>
-                      <h3>{item.label}</h3>
-                    </div>
-                    <span className="journey-arrow">↗</span>
+                  <NavLink key={item.path} className="footer-text-link" to={item.path}>
+                    {item.label}
                   </NavLink>
                 ))}
               </div>
             </div>
 
-            <div className="col-md-6 col-lg-2">
-              <p className="section-kicker mb-3">Admin</p>
-              <div className="surface surface-soft surface-pad h-100">
-                <h3 className="h5 mb-3">Admin login</h3>
-                <p className="text-secondary mb-4">
-                  Open the private access page to generate or use the access code, then unlock the private tools page.
-                </p>
-                <div className="d-flex flex-column gap-2">
-                  <NavLink to="/admin" className="btn btn-primary rounded-pill px-4">
-                    Open admin login
-                  </NavLink>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </footer>

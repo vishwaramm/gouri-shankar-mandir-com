@@ -8,6 +8,52 @@ function formatDateTime(value) {
   return date.toLocaleString()
 }
 
+function formatActionLabel(value) {
+  const text = String(value || '')
+    .replaceAll('_', ' ')
+    .trim()
+
+  if (!text) return 'Audit event'
+
+  return text
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+function formatMetadataSummary(metadata) {
+  if (!metadata || typeof metadata !== 'object') return ''
+
+  return Object.entries(metadata)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+    .join(' · ')
+}
+
+function getItemTimestamp(item = {}) {
+  return item?.publishedAt || item?.updatedAt || item?.createdAt || ''
+}
+
+function countItemsSince(items = [], days = 30) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+  return items.filter((item) => {
+    const time = new Date(getItemTimestamp(item)).getTime()
+    return Number.isFinite(time) && time >= cutoff
+  }).length
+}
+
+function countByField(items = [], field = 'service') {
+  const counts = new Map()
+  items.forEach((item) => {
+    const key = String(item?.[field] || '').trim()
+    if (!key) return
+    counts.set(key, (counts.get(key) || 0) + 1)
+  })
+  return [...counts.entries()]
+    .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+    .slice(0, 5)
+}
+
 export function SquareSyncPanel({ syncStatus, syncBusy, syncMessage, onSync }) {
   return (
     <div className="surface surface-soft surface-pad mt-4">
@@ -55,6 +101,165 @@ export function SquareSyncPanel({ syncStatus, syncBusy, syncMessage, onSync }) {
         </div>
       </div>
       {syncMessage ? <p className="small text-secondary mt-3 mb-0">{syncMessage}</p> : null}
+    </div>
+  )
+}
+
+export function SiteAnalyticsPanel({
+  orders = [],
+  newsletters = [],
+  rsvps = [],
+  communityEvents = [],
+  contactMessages = [],
+  blogPosts = [],
+  analytics = null,
+}) {
+  const requestEntries = orders.filter((item) => Boolean(item.requestId) && !item.donationId)
+  const donationEntries = orders.filter((item) => Boolean(item.donationId))
+  const snapshotTotals = analytics?.totals || {}
+  const snapshotRecent = analytics?.recent30Days || {}
+  const snapshotTopServices = Array.isArray(analytics?.topServices) ? analytics.topServices : []
+  const requestCount = Number(snapshotTotals.requests ?? requestEntries.length)
+  const supportCount = Number(
+    snapshotTotals.supportRequests ??
+      requestEntries.filter((item) => ['refund_requested', 'cancel_requested'].includes(item.serviceStatus)).length,
+  )
+  const completedCount = Number(
+    snapshotTotals.completedRequests ??
+      requestEntries.filter((item) => item.serviceStatus === 'completed' || item.serviceCompletedAt).length,
+  )
+  const newsletterCount = Number(snapshotTotals.newsletters ?? newsletters.length)
+  const rsvpCount = Number(snapshotTotals.rsvps ?? rsvps.length)
+  const contactCount = Number(snapshotTotals.contactMessages ?? contactMessages.length)
+  const communityCount = Number(snapshotTotals.communityEvents ?? communityEvents.length)
+  const blogPublishedCount = Number(
+    snapshotTotals.blogApproved ??
+      blogPosts.filter((item) => String(item.approvalStatus || 'approved') === 'approved').length,
+  )
+  const blogPendingCount = Number(
+    snapshotTotals.blogPending ?? blogPosts.filter((item) => String(item.approvalStatus || '') === 'pending').length,
+  )
+  const last30Days = [
+    { label: 'Service requests', count: Number(snapshotRecent.requests ?? countItemsSince(requestEntries, 30)) },
+    { label: 'Payments', count: Number(snapshotRecent.donations ?? countItemsSince(donationEntries, 30)) },
+    { label: 'Contact messages', count: Number(snapshotRecent.contactMessages ?? countItemsSince(contactMessages, 30)) },
+    { label: 'Temple letters', count: Number(snapshotRecent.newsletters ?? countItemsSince(newsletters, 30)) },
+    { label: 'RSVPs', count: Number(snapshotRecent.rsvps ?? countItemsSince(rsvps, 30)) },
+    { label: 'Community events', count: Number(snapshotRecent.communityEvents ?? countItemsSince(communityEvents, 30)) },
+    { label: 'Blog posts', count: Number(snapshotRecent.blogPosts ?? countItemsSince(blogPosts, 30)) },
+  ]
+  const topServices = snapshotTopServices.length
+    ? snapshotTopServices
+    : countByField(requestEntries, 'service').map(([service, count]) => ({
+        service,
+        count: Number(count || 0),
+      }))
+
+  const topWindow = Math.max(
+    1,
+    ...last30Days.map((item) => Number(item.count || 0)),
+    ...topServices.map(([, count]) => Number(count || 0)),
+  )
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Analytics</div>
+          <div className="h5 mb-1">Live site activity</div>
+          <p className="mb-0 text-secondary">
+            Real counts from requests, inbox traffic, RSVPs, blog posts, and community events.
+          </p>
+        </div>
+        <div className="d-flex flex-wrap gap-2 align-items-center">
+          <span className="badge text-bg-light border text-dark">{requestCount} requests</span>
+          <span className="badge text-bg-light border text-dark">{contactCount} messages</span>
+          <span className="badge text-bg-light border text-dark">{newsletterCount} subscribers</span>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Service requests</div>
+            <div className="h4 mb-0">{requestCount}</div>
+            <div className="small text-secondary mt-1">{supportCount} open support cases</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Completed services</div>
+            <div className="h4 mb-0">{completedCount}</div>
+            <div className="small text-secondary mt-1">From all tracked orders</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Blog</div>
+            <div className="h4 mb-0">{blogPublishedCount}</div>
+            <div className="small text-secondary mt-1">{blogPendingCount} pending approval</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Community</div>
+            <div className="h4 mb-0">{communityCount}</div>
+            <div className="small text-secondary mt-1">{rsvpCount} RSVPs</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-7">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Recent activity</div>
+            <div className="d-grid gap-3">
+              {last30Days.map((item) => {
+                const width = Math.max(8, Math.round((Number(item.count || 0) / topWindow) * 100))
+                return (
+                  <div key={item.label}>
+                    <div className="d-flex justify-content-between align-items-center gap-3 mb-1">
+                      <div className="fw-semibold">{item.label}</div>
+                      <div className="small text-secondary">{item.count} in 30 days</div>
+                    </div>
+                    <div className="progress" style={{ height: '8px' }}>
+                      <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-5">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top services</div>
+            <div className="d-grid gap-3">
+              {topServices.length ? (
+                topServices.map((serviceEntry) => {
+                  const service = serviceEntry.service || serviceEntry[0] || 'Service'
+                  const count = Number(serviceEntry.count ?? serviceEntry[1] ?? 0)
+                  const width = Math.max(8, Math.round((Number(count || 0) / topWindow) * 100))
+                  return (
+                    <div key={service}>
+                      <div className="d-flex justify-content-between align-items-center gap-3 mb-1">
+                        <div className="fw-semibold text-break">{service}</div>
+                        <div className="small text-secondary">{count}</div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-info" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No service requests yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -158,6 +363,373 @@ export function TempleLettersPanel({ subscribers = [] }) {
         ) : (
           <div className="surface surface-soft surface-pad">No temple letters subscribers yet.</div>
         )}
+      </div>
+    </div>
+  )
+}
+
+export function CommunityRsvpsPanel({ rsvps = [] }) {
+  const sortedRsvps = [...rsvps].sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Community RSVPs</div>
+          <div className="h5 mb-1">Event responses</div>
+          <p className="mb-0 text-secondary">Member RSVP records linked to accounts and community events.</p>
+        </div>
+        <span className="badge text-bg-light border text-dark">{sortedRsvps.length} responses</span>
+      </div>
+
+      <div className="timeline-list mt-3">
+        {sortedRsvps.length ? (
+          sortedRsvps.map((rsvp) => (
+            <article className="timeline-item" key={rsvp.id || `${rsvp.eventId}-${rsvp.userId}-${rsvp.createdAt}`}>
+              <time>{formatDateTime(rsvp.updatedAt || rsvp.createdAt)}</time>
+              <div>
+                <h4 className="h5 mb-1">{rsvp.eventTitle || 'Community event'}</h4>
+                <p className="mb-1 text-secondary">
+                  {rsvp.userName || 'Member'}
+                  {rsvp.email ? ` · ${rsvp.email}` : ''}
+                  {rsvp.guestCount ? ` · ${rsvp.guestCount} guest${rsvp.guestCount === 1 ? '' : 's'}` : ''}
+                </p>
+                <p className="mb-1">{rsvp.note || 'RSVP saved.'}</p>
+                <p className="mb-0 text-secondary">
+                  {rsvp.eventDate ? `Date: ${rsvp.eventDate}` : 'Date not set'}
+                  {rsvp.section ? ` · Section: ${rsvp.section}` : ''}
+                  {rsvp.kind ? ` · ${rsvp.kind}` : ''}
+                </p>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="surface surface-soft surface-pad">No RSVPs yet.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function AdminAuditLogPanel({ events = [] }) {
+  const sortedEvents = [...events].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Audit trail</div>
+          <div className="h5 mb-1">Admin activity</div>
+          <p className="mb-0 text-secondary">Recent title changes, blog actions, community edits, and inbox actions.</p>
+        </div>
+        <span className="badge text-bg-light border text-dark">{sortedEvents.length} events</span>
+      </div>
+
+      <div className="timeline-list mt-3">
+        {sortedEvents.length ? (
+          sortedEvents.map((event) => (
+            <article className="timeline-item" key={event.id || `${event.action}-${event.createdAt}`}>
+              <time>{formatDateTime(event.createdAt)}</time>
+              <div>
+                <h4 className="h5 mb-1">{formatActionLabel(event.action)}</h4>
+                <p className="mb-1 text-secondary">
+                  {event.actorName || 'Admin'}
+                  {event.actorEmail ? ` · ${event.actorEmail}` : ''}
+                  {event.actorRole ? ` · ${event.actorRole}` : ''}
+                </p>
+                <p className="mb-1">{event.details || 'Action recorded.'}</p>
+                <p className="mb-0 text-secondary">
+                  {event.targetLabel ? `Target: ${event.targetLabel}` : null}
+                  {event.targetLabel && event.targetType ? ' · ' : null}
+                  {event.targetType ? `Type: ${event.targetType}` : null}
+                </p>
+                {formatMetadataSummary(event.metadata) ? (
+                  <p className="mb-0 small text-secondary">{formatMetadataSummary(event.metadata)}</p>
+                ) : null}
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="surface surface-soft surface-pad">No admin audit events yet.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function ClientErrorLogPanel({ errors = [] }) {
+  const sortedErrors = [...errors].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Client errors</div>
+          <div className="h5 mb-1">Captured browser issues</div>
+          <p className="mb-0 text-secondary">Unhandled JavaScript errors and promise rejections reported by visitors and admins.</p>
+        </div>
+        <span className="badge text-bg-light border text-dark">{sortedErrors.length} errors</span>
+      </div>
+
+      <div className="timeline-list mt-3">
+        {sortedErrors.length ? (
+          sortedErrors.map((error) => (
+            <article className="timeline-item" key={error.id || `${error.createdAt}-${error.message}`}>
+              <time>{formatDateTime(error.createdAt)}</time>
+              <div>
+                <h4 className="h5 mb-1">{error.message || 'Browser error'}</h4>
+                <p className="mb-1 text-secondary">
+                  {error.source || 'window.error'}
+                  {error.pageUrl ? ` · ${error.pageUrl}` : ''}
+                </p>
+                <p className="mb-1">
+                  {error.filename ? error.filename : 'No filename'}
+                  {Number.isInteger(error.lineNumber) ? `:${error.lineNumber}` : ''}
+                  {Number.isInteger(error.columnNumber) ? `:${error.columnNumber}` : ''}
+                </p>
+                {error.stack ? (
+                  <pre className="mb-0 small text-secondary" style={{ whiteSpace: 'pre-wrap' }}>
+                    {error.stack}
+                  </pre>
+                ) : null}
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="surface surface-soft surface-pad">No client errors captured yet.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatBytes(value = 0) {
+  const size = Number(value) || 0
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let current = size
+  let unitIndex = 0
+
+  while (current >= 1024 && unitIndex < units.length - 1) {
+    current /= 1024
+    unitIndex += 1
+  }
+
+  return `${current.toFixed(current >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function getSeverityBadgeClass(severity = 'warning') {
+  if (severity === 'critical') return 'text-bg-danger'
+  if (severity === 'info') return 'text-bg-info'
+  return 'text-bg-warning text-dark'
+}
+
+export function ApiMetricsPanel({
+  metrics = null,
+  onRefresh,
+  refreshBusy = false,
+  refreshError = '',
+  onResolveAlert,
+  resolvingAlertIds = {},
+}) {
+  const snapshot = metrics?.metrics || {}
+  const runtime = metrics?.runtime || {}
+  const serviceState = metrics?.serviceState || {}
+  const alerts = metrics?.alerts || { open: [], recent: [] }
+  const statusCounts = Array.isArray(snapshot.statusCounts) ? snapshot.statusCounts : []
+  const routes = Array.isArray(snapshot.routes) ? snapshot.routes : []
+  const recentErrors = Array.isArray(snapshot.recentErrors) ? snapshot.recentErrors : []
+  const openAlerts = Array.isArray(alerts.open) ? alerts.open : []
+
+  const topStatusCount = Math.max(...statusCounts.map((item) => Number(item.count || 0)), 1)
+  const topRouteCount = Math.max(...routes.map((item) => Number(item.count || 0)), 1)
+
+  return (
+    <div className="surface surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Metrics</div>
+          <div className="h5 mb-1">Operational overview</div>
+          <p className="mb-0 text-secondary">Request volume, latency, runtime memory, and active alert state.</p>
+        </div>
+        <div className="d-flex flex-wrap gap-2 align-items-center">
+          <span className={`badge ${serviceState.strictPersistence ? 'text-bg-success' : 'text-bg-warning text-dark'}`}>
+            {serviceState.strictPersistence ? 'Strict persistence' : 'Flexible storage'}
+          </span>
+          <span className={`badge ${serviceState.databaseStatus === 'connected' ? 'text-bg-success' : 'text-bg-warning text-dark'}`}>
+            {serviceState.databaseStatus || 'unknown'}
+          </span>
+          <span className="badge text-bg-light border text-dark">{snapshot?.totals?.requests || 0} requests</span>
+          {onRefresh ? (
+            <button
+              type="button"
+              className="btn btn-outline-light btn-sm rounded-pill px-3"
+              disabled={refreshBusy}
+              onClick={onRefresh}
+            >
+              {refreshBusy ? 'Refreshing...' : 'Refresh metrics'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Average latency</div>
+            <div className="h4 mb-0">{snapshot?.durations?.averageMs || 0} ms</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Peak latency</div>
+            <div className="h4 mb-0">{snapshot?.durations?.maxMs || 0} ms</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">5xx errors</div>
+            <div className="h4 mb-0">{snapshot?.totals?.serverErrors || 0}</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Memory</div>
+            <div className="h4 mb-0">{formatBytes(runtime?.memoryUsage?.rss || 0)}</div>
+          </div>
+        </div>
+      </div>
+      {refreshError ? <p className="small text-danger mt-3 mb-0">{refreshError}</p> : null}
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-5">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Status codes</div>
+            <div className="d-grid gap-2">
+              {statusCounts.length ? (
+                statusCounts.map((item) => {
+                  const width = Math.max(6, Math.round((Number(item.count || 0) / topStatusCount) * 100))
+                  return (
+                    <div key={item.statusCode} className="d-flex align-items-center gap-3">
+                      <div style={{ minWidth: '52px' }} className="small fw-semibold">
+                        {item.statusCode}
+                      </div>
+                      <div className="flex-grow-1">
+                        <div className="progress" style={{ height: '8px' }}>
+                          <div className={`progress-bar ${String(item.statusCode).startsWith('5') ? 'bg-danger' : String(item.statusCode).startsWith('4') ? 'bg-warning' : 'bg-success'}`} style={{ width: `${width}%` }} />
+                        </div>
+                      </div>
+                      <div className="small text-secondary" style={{ minWidth: '48px', textAlign: 'right' }}>
+                        {item.count}
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No status codes recorded yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-7">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top routes</div>
+            <div className="d-grid gap-3">
+              {routes.length ? (
+                routes.slice(0, 6).map((route) => {
+                  const width = Math.max(6, Math.round((Number(route.count || 0) / topRouteCount) * 100))
+                  return (
+                    <div key={route.route}>
+                      <div className="d-flex justify-content-between align-items-center gap-3 mb-1">
+                        <div className="fw-semibold text-break">{route.route}</div>
+                        <div className="small text-secondary">
+                          {route.count} req · avg {route.averageDurationMs || 0} ms
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No route metrics yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="d-flex justify-content-between align-items-center gap-3 mb-3">
+              <div className="section-kicker">Open alerts</div>
+              <span className="badge text-bg-light border text-dark">{openAlerts.length}</span>
+            </div>
+            <div className="timeline-list">
+              {openAlerts.length ? (
+                openAlerts.map((alert) => (
+                  <article className="timeline-item" key={alert.id}>
+                    <time>{formatDateTime(alert.lastSeenAt || alert.createdAt)}</time>
+                    <div>
+                      <h4 className="h5 mb-1">{alert.title || 'Alert'}</h4>
+                      <div className="d-flex flex-wrap gap-2 align-items-center mb-2">
+                        <span className={`badge ${getSeverityBadgeClass(alert.severity)}`}>{alert.severity || 'warning'}</span>
+                        <span className="badge text-bg-light border text-dark">{alert.occurrenceCount || 1} hits</span>
+                      </div>
+                      <p className="mb-2 text-secondary">{alert.message || 'Alert triggered.'}</p>
+                      <div className="d-flex flex-wrap gap-2 align-items-center">
+                        {onResolveAlert ? (
+                          <button
+                            type="button"
+                            className="btn btn-outline-light btn-sm rounded-pill px-3"
+                            disabled={Boolean(resolvingAlertIds?.[alert.id])}
+                            onClick={() => onResolveAlert(alert)}
+                          >
+                            {resolvingAlertIds?.[alert.id] ? 'Resolving...' : 'Resolve'}
+                          </button>
+                        ) : null}
+                        <span className="small text-secondary">
+                          {alert.details && typeof alert.details === 'object'
+                            ? Object.entries(alert.details)
+                                .map(([key, value]) => `${key}: ${value}`)
+                                .join(' · ')
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="surface surface-soft surface-pad">No open alerts.</div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Recent errors</div>
+            <div className="timeline-list">
+              {recentErrors.length ? (
+                recentErrors.slice(0, 6).map((error) => (
+                  <article className="timeline-item" key={`${error.requestId}-${error.createdAt}`}>
+                    <time>{formatDateTime(error.createdAt)}</time>
+                    <div>
+                      <h4 className="h5 mb-1">{error.method} {error.route}</h4>
+                      <p className="mb-1 text-secondary">
+                        {error.statusCode} · {error.durationMs || 0} ms{error.aborted ? ' · aborted' : ''}
+                      </p>
+                      <p className="mb-0">{error.errorMessage || 'Request error'}</p>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="surface surface-soft surface-pad">No recent request errors.</div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

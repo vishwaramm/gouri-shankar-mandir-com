@@ -1,14 +1,24 @@
 import http from 'node:http'
 import process from 'node:process'
-import { handleSiteApi, initializeSiteApi, sendJson } from './site-api.mjs'
+import {
+  createRequestObserver,
+  handleSiteApi,
+  initializeSiteApi,
+  sendJson,
+  startOperationalAlertMonitor,
+  startRsvpReminderMonitor,
+} from './site-api.mjs'
 
 const port = Number(process.env.PORT || 8080)
 const host = process.env.HOST || '0.0.0.0'
 
 await initializeSiteApi(process.env)
+startOperationalAlertMonitor(process.env)
+startRsvpReminderMonitor(process.env)
 
 const server = http.createServer(async (request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname
+  createRequestObserver({ request, response, service: 'api', route: pathname })
 
   if (!pathname.startsWith('/api/')) {
     sendJson(response, 404, { ok: false, message: 'Not found.' })

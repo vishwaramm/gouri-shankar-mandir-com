@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import PasswordField from '../components/PasswordField.jsx'
 import { loadCurrentUser, signupUser } from '../lib/siteApi.js'
 
 function SignUpPage() {
@@ -124,19 +125,15 @@ function SignUpPage() {
                         autoComplete="email"
                       />
                     </div>
-                    <div>
-                      <label className="form-label fw-semibold">Password</label>
-                      <input
-                        type="password"
-                        className="form-control"
-                        value={signupForm.password}
-                        onChange={(event) =>
-                          setSignupForm((current) => ({ ...current, password: event.target.value }))
-                        }
-                        placeholder="At least 8 characters"
-                        autoComplete="new-password"
-                      />
-                    </div>
+                    <PasswordField
+                      label="Password"
+                      value={signupForm.password}
+                      onChange={(event) =>
+                        setSignupForm((current) => ({ ...current, password: event.target.value }))
+                      }
+                      placeholder="At least 8 characters"
+                      autoComplete="new-password"
+                    />
                     <div className="d-flex flex-wrap gap-3 align-items-center">
                       <button type="submit" className="btn btn-primary rounded-pill px-4" disabled={busy}>
                         {busy ? 'Creating...' : 'Create account'}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   samskaras,
@@ -8,6 +8,7 @@ import {
   serviceOptions,
 } from '../content.js'
 import { createPaymentLink, createServiceRequest } from '../lib/siteApi.js'
+import { createSubmissionKey, isRetryableSubmissionError, queuePendingSubmission } from '../lib/offlineQueue.js'
 
 const serviceFaqItems = [
   {
@@ -104,6 +105,8 @@ function ServicesPage() {
       : 'Free inquiry. Contribution is confirmed after priest review.',
   )
   const [requestOutcome, setRequestOutcome] = useState(null)
+  const [isSubmittingRequest, setIsSubmittingRequest] = useState(false)
+  const requestSubmitLockRef = useRef(false)
 
   const filteredServices = useMemo(() => {
     const query = serviceQuery.trim().toLowerCase()
@@ -159,43 +162,75 @@ function ServicesPage() {
     setRequestOutcome(null)
   }
 
-  const handleServiceRequestSubmit = (event) => {
+  const handleServiceRequestSubmit = async (event) => {
     event.preventDefault()
+    if (requestSubmitLockRef.current || isSubmittingRequest) return
+    requestSubmitLockRef.current = true
+    const submissionKey = createSubmissionKey('service-request')
     const payload = {
       ...serviceRequest,
       requestMode,
+      submissionKey,
     }
 
-    if (!payload.name || !payload.email || !payload.note) return
-    if (requestMode === 'in-person' && !payload.location) return
+    if (!payload.name || !payload.email || !payload.note) {
+      requestSubmitLockRef.current = false
+      return
+    }
+    if (requestMode === 'in-person' && !payload.location) {
+      requestSubmitLockRef.current = false
+      return
+    }
 
-    createServiceRequest(payload)
-      .then((result) => {
-        const orderCode = result.orderCode || result.entry?.orderCode || ''
-        setRequestStatus(
+    try {
+      setIsSubmittingRequest(true)
+      const result = await createServiceRequest(payload)
+      const orderCode = result.orderCode || result.entry?.orderCode || ''
+      setRequestStatus(
+        result.emailed === false
+          ? result.mailStatus === 'missing_smtp'
+            ? 'Saved. Mail delivery is not configured yet, but the request was recorded.'
+            : result.mailError
+              ? `Saved. Mail delivery failed: ${result.mailError}`
+              : 'Saved. Mail delivery failed.'
+          : 'Received. We will confirm the contribution and timing by email.',
+      )
+      setRequestOutcome({
+        orderCode,
+        trackUrl: result.trackUrl || (orderCode ? `/track-order?code=${encodeURIComponent(orderCode)}` : ''),
+        emailSent: result.confirmationEmailSent,
+        message:
           result.emailed === false
-            ? result.mailStatus === 'missing_smtp'
-              ? 'Saved. Mail delivery is not configured yet, but the request was recorded.'
-              : result.mailError
-                ? `Saved. Mail delivery failed: ${result.mailError}`
-                : 'Saved. Mail delivery failed.'
-            : 'Received. We will confirm the contribution and timing by email.',
-        )
+            ? 'Your request was saved.'
+            : 'Your request was received and emailed to the priest team.',
+      })
+      setServiceRequest(initialRequest)
+      setRequestMode('virtual')
+    } catch (error) {
+      if (isRetryableSubmissionError(error)) {
+        queuePendingSubmission({
+          kind: 'service-request',
+          submissionKey,
+          payload,
+          label: 'Service request',
+        })
+        setRequestStatus('Saved offline. It will send when the connection returns.')
         setRequestOutcome({
-          orderCode,
-          trackUrl: result.trackUrl || (orderCode ? `/track-order?code=${encodeURIComponent(orderCode)}` : ''),
-          emailSent: result.confirmationEmailSent,
-          message:
-            result.emailed === false
-              ? 'Your request was saved.'
-              : 'Your request was received and emailed to the priest team.',
+          orderCode: '',
+          trackUrl: '',
+          emailSent: false,
+          message: 'Your request is queued until the connection returns.',
         })
         setServiceRequest(initialRequest)
         setRequestMode('virtual')
-      })
-      .catch(() => {
-        setRequestStatus('Unable to send right now.')
-      })
+        return
+      }
+
+      setRequestStatus('Unable to send right now.')
+    } finally {
+      requestSubmitLockRef.current = false
+      setIsSubmittingRequest(false)
+    }
   }
 
   useEffect(() => {
@@ -767,8 +802,12 @@ function ServicesPage() {
                 />
               </div>
               <div className="col-12 d-flex flex-wrap align-items-center gap-3">
-                <button type="submit" className="btn btn-primary btn-lg rounded-pill px-4">
-                  {requestMode === 'in-person' ? 'Request in-person quote' : 'Submit request'}
+                <button type="submit" className="btn btn-primary btn-lg rounded-pill px-4" disabled={isSubmittingRequest}>
+                  {isSubmittingRequest
+                    ? 'Sending...'
+                    : requestMode === 'in-person'
+                      ? 'Request in-person quote'
+                      : 'Submit request'}
                 </button>
                 <p className={`mb-0 text-secondary ${requestStatus ? 'fw-semibold' : ''}`}>
                   {requestStatus}
