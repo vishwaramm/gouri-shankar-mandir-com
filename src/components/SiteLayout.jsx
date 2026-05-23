@@ -14,6 +14,7 @@ import {
   logoutUser,
   reportClientError,
 } from '../lib/siteApi.js'
+import { trackPageView } from '../lib/analytics.js'
 import {
   flushPendingSubmissions,
   loadPendingSubmissions,
@@ -40,6 +41,7 @@ function SiteLayout() {
   const adminMenuRef = useRef(null)
   const adminToggleRef = useRef(null)
   const reportedClientErrorsRef = useRef(new Set())
+  const lastTrackedPageViewRef = useRef('')
   const location = useLocation()
   const year = new Date().getFullYear()
   const onAdminRoute = location.pathname === '/priest-review' || location.pathname.startsWith('/priest-')
@@ -94,6 +96,34 @@ function SiteLayout() {
   useEffect(() => {
     applySeoForPath(location.pathname, location.search)
   }, [location.pathname, location.search])
+
+  useEffect(() => {
+    if (accountState.loading) return
+
+    const currentKey = `${location.pathname}${location.search}`
+    if (lastTrackedPageViewRef.current === currentKey) return
+
+    const isBlogPostRoute = location.pathname.startsWith('/blog/') && location.pathname !== '/blog/'
+    const contentType = isBlogPostRoute ? 'blog_post' : 'page'
+    const contentId = isBlogPostRoute ? location.pathname.split('/').filter(Boolean)[1] || '' : ''
+    const referrer = lastTrackedPageViewRef.current
+      ? new URL(lastTrackedPageViewRef.current, window.location.origin).toString()
+      : typeof document !== 'undefined'
+        ? document.referrer || ''
+        : ''
+
+    lastTrackedPageViewRef.current = currentKey
+
+    trackPageView({
+      path: location.pathname,
+      search: location.search,
+      pageTitle: typeof document !== 'undefined' ? document.title : '',
+      referrer,
+      contentType,
+      contentId,
+      isAdminRoute: onAdminRoute,
+    })
+  }, [accountState.loading, location.pathname, location.search, onAdminRoute])
 
   useEffect(() => {
     refreshPendingSubmissionCount()

@@ -61,6 +61,12 @@ const BLOG_AUTHOR_ALIASES = {
 
 let mongoClient
 let mongoDbPromise
+let latestSiteApiEnv = null
+let siteAnalyticsRetryWorkerStarted = false
+let siteAnalyticsRetryWorkerRunning = false
+
+const SITE_ANALYTICS_RETRY_INTERVAL_MS = 10_000
+const SITE_ANALYTICS_RETRY_QUEUE_LIMIT = 5_000
 
 const memoryStore = {
   newsletters: [],
@@ -84,6 +90,8 @@ const memoryStore = {
   adminUsers: [],
   adminSessions: [],
 }
+
+const siteAnalyticsPageViewRetryQueue = []
 
 const apiRuntimeMetrics = {
   startedAt: Date.now(),
@@ -258,8 +266,9 @@ async function evaluateOperationalAlerts(db, env) {
   const activeDefinitions = buildOperationalAlertDefinitions()
   const activeKeys = new Set(activeDefinitions.map((item) => item.key))
   const now = new Date().toISOString()
+  const databaseConnected = Boolean(db)
 
-  if (isStrictPersistenceEnabled(env) && !usingMongo) {
+  if (isStrictPersistenceEnabled(env) && !databaseConnected) {
     activeDefinitions.push({
       key: 'database_unavailable',
       severity: 'critical',
@@ -267,7 +276,7 @@ async function evaluateOperationalAlerts(db, env) {
       message: 'Strict persistence is enabled but MongoDB is not connected.',
       details: {
         strictPersistence: true,
-        databaseStatus: usingMongo ? 'connected' : 'memory',
+        databaseStatus: databaseConnected ? 'connected' : 'memory',
       },
     })
     activeKeys.add('database_unavailable')
@@ -415,7 +424,7 @@ export function startOperationalAlertMonitor(env) {
 
   const run = async () => {
     try {
-      const db = await getMongoDb(env)
+      const db = await getDb(env)
       if (!db) return
       await evaluateOperationalAlerts(db, env)
     } catch (error) {
@@ -436,7 +445,7 @@ export function startRsvpReminderMonitor(env) {
 
   const run = async () => {
     try {
-      const db = await getMongoDb(env)
+      const db = await getDb(env)
       if (!db) return
       await evaluateRsvpReminders(db, env)
     } catch (error) {
@@ -659,6 +668,12 @@ async function getDb(env) {
           db.collection('blogPosts').createIndex({ createdAt: -1 }),
           db.collection('blogPostLikes').createIndex({ postId: 1, ipHash: 1 }, { unique: true }),
           db.collection('blogPostLikes').createIndex({ createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ path: 1, createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ contentType: 1, contentId: 1, createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ visitorId: 1, createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ userId: 1, createdAt: -1 }),
+          db.collection('siteAnalyticsPageViews').createIndex({ ipHash: 1, createdAt: -1 }),
           db.collection('adminAuditEvents').createIndex({ createdAt: -1 }),
           db.collection('adminAuditEvents').createIndex({ action: 1 }),
           db.collection('clientErrorEvents').createIndex({ createdAt: -1 }),
@@ -698,7 +713,8 @@ async function listCollection(db, name) {
 }
 
 async function buildSiteAnalyticsSnapshot(db) {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  const thirtyDaysAgoIso = thirtyDaysAgo.toISOString()
   const getTimestamp = (item = {}) => item?.publishedAt || item?.updatedAt || item?.createdAt || ''
   const countByService = (items = []) => {
     const counts = new Map()
@@ -711,6 +727,7 @@ async function buildSiteAnalyticsSnapshot(db) {
   }
 
   if (db) {
+    const pageViewsCollection = getSiteAnalyticsCollection(db)
     const [
       requestTotals,
       donationTotals,
@@ -729,6 +746,25 @@ async function buildSiteAnalyticsSnapshot(db) {
       communityRecent,
       blogRecent,
       topServices,
+      pageViews,
+      recentPageViews,
+      authenticatedPageViews,
+      recentAuthenticatedPageViews,
+      anonymousPageViews,
+      recentAnonymousPageViews,
+      authenticatedUniqueVisitors,
+      recentAuthenticatedUniqueVisitors,
+      anonymousUniqueVisitors,
+      recentAnonymousUniqueVisitors,
+      anonymousIpFingerprints,
+      recentAnonymousIpFingerprints,
+      topPages,
+      pageBreakdown,
+      topBlogPosts,
+      topReferrers,
+      topUsers,
+      dailyViews,
+      trafficEvents,
     ] = await Promise.all([
       db.collection('orders').countDocuments({ requestId: { $exists: true }, donationId: { $exists: false } }),
       db.collection('orders').countDocuments({ donationId: { $exists: true } }),
@@ -742,17 +778,17 @@ async function buildSiteAnalyticsSnapshot(db) {
       db.collection('orders').countDocuments({
         requestId: { $exists: true },
         donationId: { $exists: false },
-        createdAt: { $gte: thirtyDaysAgo },
+        createdAt: { $gte: thirtyDaysAgoIso },
       }),
       db.collection('orders').countDocuments({
         donationId: { $exists: true },
-        createdAt: { $gte: thirtyDaysAgo },
+        createdAt: { $gte: thirtyDaysAgoIso },
       }),
-      db.collection('contactMessages').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-      db.collection('newsletters').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-      db.collection('rsvps').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-      db.collection('communityEvents').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-      db.collection('blogPosts').countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      db.collection('contactMessages').countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
+      db.collection('newsletters').countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
+      db.collection('rsvps').countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
+      db.collection('communityEvents').countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
+      db.collection('blogPosts').countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
       db.collection('orders')
         .aggregate([
           { $match: { requestId: { $exists: true }, donationId: { $exists: false } } },
@@ -760,6 +796,179 @@ async function buildSiteAnalyticsSnapshot(db) {
           { $sort: { count: -1, _id: 1 } },
           { $limit: 5 },
         ])
+        .toArray(),
+      pageViewsCollection.countDocuments({}),
+      pageViewsCollection.countDocuments({ createdAt: { $gte: thirtyDaysAgoIso } }),
+      pageViewsCollection.countDocuments({ userId: { $exists: true, $ne: '' } }),
+      pageViewsCollection.countDocuments({ userId: { $exists: true, $ne: '' }, createdAt: { $gte: thirtyDaysAgoIso } }),
+      pageViewsCollection.countDocuments({ $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }] }),
+      pageViewsCollection.countDocuments({
+        $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }],
+        createdAt: { $gte: thirtyDaysAgoIso },
+      }),
+      pageViewsCollection.distinct('userId', { userId: { $exists: true, $ne: '' } }),
+      pageViewsCollection.distinct('userId', { userId: { $exists: true, $ne: '' }, createdAt: { $gte: thirtyDaysAgoIso } }),
+      pageViewsCollection.distinct('visitorId', { $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }] }),
+      pageViewsCollection.distinct('visitorId', {
+        $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }],
+        createdAt: { $gte: thirtyDaysAgoIso },
+      }),
+      pageViewsCollection.distinct('ipHash', { $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }] }),
+      pageViewsCollection.distinct('ipHash', {
+        $or: [{ userId: { $exists: false } }, { userId: '' }, { userId: null }],
+        createdAt: { $gte: thirtyDaysAgoIso },
+      }),
+      pageViewsCollection
+        .aggregate([
+          { $match: { path: { $exists: true, $ne: '' } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$path',
+              count: { $sum: 1 },
+              uniqueVisitors: { $addToSet: { $ifNull: ['$userId', '$visitorId'] } },
+              anonymousViews: {
+                $sum: {
+                  $cond: [{ $or: [{ $eq: ['$userId', null] }, { $eq: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              authenticatedViews: {
+                $sum: {
+                  $cond: [{ $and: [{ $ne: ['$userId', null] }, { $ne: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              pageTitle: { $first: '$pageTitle' },
+              contentType: { $first: '$contentType' },
+              contentId: { $first: '$contentId' },
+              lastViewedAt: { $first: '$createdAt' },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 10 },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .aggregate([
+          { $match: { path: { $exists: true, $ne: '' } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$path',
+              count: { $sum: 1 },
+              uniqueVisitors: { $addToSet: { $ifNull: ['$userId', '$visitorId'] } },
+              anonymousViews: {
+                $sum: {
+                  $cond: [{ $or: [{ $eq: ['$userId', null] }, { $eq: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              authenticatedViews: {
+                $sum: {
+                  $cond: [{ $and: [{ $ne: ['$userId', null] }, { $ne: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              pageTitle: { $first: '$pageTitle' },
+              contentType: { $first: '$contentType' },
+              contentId: { $first: '$contentId' },
+              lastViewedAt: { $first: '$createdAt' },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 100 },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .aggregate([
+          {
+            $match: {
+              contentType: 'blog_post',
+              contentId: { $exists: true, $ne: '' },
+            },
+          },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$contentId',
+              count: { $sum: 1 },
+              uniqueVisitors: { $addToSet: { $ifNull: ['$userId', '$visitorId'] } },
+              anonymousViews: {
+                $sum: {
+                  $cond: [{ $or: [{ $eq: ['$userId', null] }, { $eq: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              authenticatedViews: {
+                $sum: {
+                  $cond: [{ $and: [{ $ne: ['$userId', null] }, { $ne: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              path: { $first: '$path' },
+              pageTitle: { $first: '$pageTitle' },
+              lastViewedAt: { $first: '$createdAt' },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 10 },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .aggregate([
+          { $match: { referrer: { $exists: true, $ne: '' } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$referrer',
+              count: { $sum: 1 },
+              lastViewedAt: { $first: '$createdAt' },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 10 },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .aggregate([
+          { $match: { userId: { $exists: true, $ne: '' } } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: '$userId',
+              count: { $sum: 1 },
+              uniqueVisitors: { $addToSet: '$visitorId' },
+              userName: { $first: '$userName' },
+              userEmail: { $first: '$userEmail' },
+              lastViewedAt: { $first: '$createdAt' },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 10 },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .aggregate([
+          { $match: { createdAt: { $gte: thirtyDaysAgoIso } } },
+          {
+            $group: {
+              _id: '$dateKey',
+              count: { $sum: 1 },
+              uniqueVisitors: { $addToSet: { $ifNull: ['$userId', '$visitorId'] } },
+              anonymousViews: {
+                $sum: {
+                  $cond: [{ $or: [{ $eq: ['$userId', null] }, { $eq: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+              authenticatedViews: {
+                $sum: {
+                  $cond: [{ $and: [{ $ne: ['$userId', null] }, { $ne: ['$userId', ''] }] }, 1, 0],
+                },
+              },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ])
+        .toArray(),
+      pageViewsCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .limit(500)
         .toArray(),
     ])
 
@@ -788,6 +997,75 @@ async function buildSiteAnalyticsSnapshot(db) {
         service: item._id || 'Service',
         count: Number(item.count || 0),
       })),
+    traffic: {
+      available: true,
+      pageViews,
+      uniqueVisitors: authenticatedUniqueVisitors.length + anonymousUniqueVisitors.length,
+        authenticatedPageViews,
+        anonymousPageViews,
+        authenticatedUniqueVisitors: authenticatedUniqueVisitors.length,
+        anonymousUniqueVisitors: anonymousUniqueVisitors.length,
+        anonymousIpFingerprints: anonymousIpFingerprints.length,
+        recentPageViews,
+        recentUniqueVisitors: recentAuthenticatedUniqueVisitors.length + recentAnonymousUniqueVisitors.length,
+        recentAuthenticatedPageViews,
+        recentAnonymousPageViews,
+        recentAuthenticatedUniqueVisitors: recentAuthenticatedUniqueVisitors.length,
+        recentAnonymousUniqueVisitors: recentAnonymousUniqueVisitors.length,
+        recentAnonymousIpFingerprints: recentAnonymousIpFingerprints.length,
+        topPages: topPages.map((item) => ({
+          path: normalizeAnalyticsPath(item._id || '/'),
+          title: item.pageTitle || item._id || 'Page',
+          count: Number(item.count || 0),
+          uniqueVisitors: Array.isArray(item.uniqueVisitors) ? item.uniqueVisitors.length : 0,
+          anonymousViews: Number(item.anonymousViews || 0),
+          authenticatedViews: Number(item.authenticatedViews || 0),
+          lastViewedAt: item.lastViewedAt || '',
+          contentType: item.contentType || 'page',
+          contentId: item.contentId || '',
+        })),
+        pageBreakdown: pageBreakdown.map((item) => ({
+          path: normalizeAnalyticsPath(item._id || '/'),
+          title: item.pageTitle || item._id || 'Page',
+          count: Number(item.count || 0),
+          uniqueVisitors: Array.isArray(item.uniqueVisitors) ? item.uniqueVisitors.length : 0,
+          anonymousViews: Number(item.anonymousViews || 0),
+          authenticatedViews: Number(item.authenticatedViews || 0),
+          lastViewedAt: item.lastViewedAt || '',
+          contentType: item.contentType || 'page',
+          contentId: item.contentId || '',
+        })),
+        topBlogPosts: topBlogPosts.map((item) => ({
+          postId: item._id || '',
+          path: normalizeAnalyticsPath(item.path || `/blog/${item._id || ''}`),
+          title: item.pageTitle || item._id || 'Blog post',
+          count: Number(item.count || 0),
+          uniqueVisitors: Array.isArray(item.uniqueVisitors) ? item.uniqueVisitors.length : 0,
+          anonymousViews: Number(item.anonymousViews || 0),
+          authenticatedViews: Number(item.authenticatedViews || 0),
+          lastViewedAt: item.lastViewedAt || '',
+        })),
+        topReferrers: topReferrers.map((item) => ({
+          referrer: item._id || 'direct',
+          count: Number(item.count || 0),
+          lastViewedAt: item.lastViewedAt || '',
+        })),
+        topUsers: topUsers.map((item) => ({
+          userId: item._id || '',
+          userName: item.userName || item._id || 'User',
+          userEmail: item.userEmail || '',
+          count: Number(item.count || 0),
+          uniqueVisitors: Array.isArray(item.uniqueVisitors) ? item.uniqueVisitors.length : 0,
+          lastViewedAt: item.lastViewedAt || '',
+        })),
+        dailyViews: dailyViews.map((item) => ({
+          date: item._id || '',
+          count: Number(item.count || 0),
+          uniqueVisitors: Array.isArray(item.uniqueVisitors) ? item.uniqueVisitors.length : 0,
+          anonymousViews: Number(item.anonymousViews || 0),
+          authenticatedViews: Number(item.authenticatedViews || 0),
+        })),
+      },
     }
   }
 
@@ -799,7 +1077,7 @@ async function buildSiteAnalyticsSnapshot(db) {
   const countRecent = (items = []) =>
     items.filter((item) => {
       const createdAt = new Date(getTimestamp(item)).getTime()
-      return Number.isFinite(createdAt) && createdAt >= new Date(thirtyDaysAgo).getTime()
+      return Number.isFinite(createdAt) && createdAt >= thirtyDaysAgo.getTime()
     }).length
 
   return {
@@ -827,6 +1105,9 @@ async function buildSiteAnalyticsSnapshot(db) {
       service,
       count: Number(count || 0),
     })),
+    traffic: {
+      available: false,
+    },
   }
 }
 
@@ -1179,12 +1460,65 @@ function getBlogPostLikesCollection(db) {
   return db.collection('blogPostLikes')
 }
 
+function getSiteAnalyticsCollection(db) {
+  return db.collection('siteAnalyticsPageViews')
+}
+
+function getAnalyticsIpSecret(env) {
+  return (
+    env.SITE_ANALYTICS_IP_SALT?.trim() ||
+    env.SITE_ANALYTICS_SALT?.trim() ||
+    env.SITE_SECRET?.trim() ||
+    env.ADMIN_SESSION_SECRET?.trim() ||
+    env.MANDIR_WEBHOOK_SECRET?.trim() ||
+    'site-analytics-ip-salt'
+  )
+}
+
+function getAnalyticsIpHash(request, env) {
+  const clientIp = getRequestClientIp(request)
+  if (!clientIp) return ''
+  return createHash('sha256').update(`${clientIp}|${getAnalyticsIpSecret(env)}`).digest('hex')
+}
+
 function getCommunityEventsCollection(db) {
   return db.collection('communityEvents')
 }
 
 function getRsvpsCollection(db) {
   return db.collection('rsvps')
+}
+
+function normalizeAnalyticsPath(value = '') {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return '/'
+
+  try {
+    const parsed = new URL(raw, 'http://localhost')
+    const pathname = parsed.pathname || '/'
+    return pathname === '/' ? '/' : pathname.replace(/\/+$/, '') || '/'
+  } catch {
+    const normalized = raw.startsWith('/') ? raw : `/${raw}`
+    return normalized === '/' ? '/' : normalized.replace(/\/+$/, '') || '/'
+  }
+}
+
+function normalizeAnalyticsReferrer(value = '') {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return 'direct'
+
+  try {
+    const parsed = new URL(raw)
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '') || parsed.origin
+  } catch {
+    return raw.slice(0, 200)
+  }
+}
+
+function getAnalyticsDateKey(value = '') {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10)
+  return date.toISOString().slice(0, 10)
 }
 
 async function readJsonFile(filePath) {
@@ -1199,6 +1533,102 @@ async function readJsonFile(filePath) {
 async function writeJsonFile(filePath, data) {
   await mkdir(dirname(filePath), { recursive: true })
   await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
+}
+
+async function saveSiteAnalyticsPageView(db, entry) {
+  if (!db) {
+    throw new Error('Database storage is required for traffic analytics.')
+  }
+
+  await getSiteAnalyticsCollection(db).insertOne(entry)
+}
+
+function enqueueSiteAnalyticsPageView(entry, reason = '') {
+  siteAnalyticsPageViewRetryQueue.push({
+    entry,
+    reason: typeof reason === 'string' ? reason : '',
+    attempts: 0,
+    queuedAt: new Date().toISOString(),
+    nextRetryAt: new Date().toISOString(),
+  })
+
+  while (siteAnalyticsPageViewRetryQueue.length > SITE_ANALYTICS_RETRY_QUEUE_LIMIT) {
+    siteAnalyticsPageViewRetryQueue.shift()
+  }
+}
+
+async function flushSiteAnalyticsPageViewRetryQueue() {
+  if (siteAnalyticsRetryWorkerRunning) return
+  if (!siteAnalyticsPageViewRetryQueue.length) return
+  if (!latestSiteApiEnv) return
+
+  siteAnalyticsRetryWorkerRunning = true
+  try {
+    const db = await getDb(latestSiteApiEnv)
+    if (!db) return
+
+    const nowMs = Date.now()
+    const pending = []
+    const readyEntries = []
+
+    for (const queuedItem of siteAnalyticsPageViewRetryQueue) {
+      const retryAtMs = new Date(queuedItem.nextRetryAt || 0).getTime()
+      if (Number.isFinite(retryAtMs) && retryAtMs > nowMs) {
+        pending.push(queuedItem)
+        continue
+      }
+      readyEntries.push(queuedItem)
+    }
+
+    if (!readyEntries.length) {
+      siteAnalyticsPageViewRetryQueue.splice(0, siteAnalyticsPageViewRetryQueue.length, ...pending)
+      return
+    }
+
+    const stillPending = []
+    for (const queuedItem of readyEntries) {
+      try {
+        await saveSiteAnalyticsPageView(db, queuedItem.entry)
+      } catch (error) {
+        const attempts = Number(queuedItem.attempts || 0) + 1
+        const backoffMs = Math.min(10 * 60_000, 1000 * 2 ** Math.min(attempts, 8))
+        stillPending.push({
+          ...queuedItem,
+          attempts,
+          nextRetryAt: new Date(Date.now() + backoffMs).toISOString(),
+          lastError: error?.message || 'Unable to save pageview.',
+        })
+        console.error('Failed to flush queued site analytics pageview:', error)
+      }
+    }
+
+    siteAnalyticsPageViewRetryQueue.splice(0, siteAnalyticsPageViewRetryQueue.length, ...pending, ...stillPending)
+  } finally {
+    siteAnalyticsRetryWorkerRunning = false
+  }
+}
+
+function startSiteAnalyticsRetryWorker(env = latestSiteApiEnv) {
+  if (env) {
+    latestSiteApiEnv = env
+  }
+
+  if (siteAnalyticsRetryWorkerStarted) return
+  siteAnalyticsRetryWorkerStarted = true
+
+  const run = async () => {
+    try {
+      await flushSiteAnalyticsPageViewRetryQueue()
+    } catch (error) {
+      console.error('Site analytics retry worker failed:', error)
+    }
+  }
+
+  void run()
+  const timer = setInterval(() => {
+    void run()
+  }, SITE_ANALYTICS_RETRY_INTERVAL_MS)
+  timer.unref?.()
 }
 
 function hashSecret(value) {
@@ -3999,6 +4429,8 @@ function buildCompletionHtml({ name, service, amountCents, orderCode = '', compl
 }
 
 export async function handleSiteApi(request, response, pathname, env = {}) {
+  latestSiteApiEnv = env
+  startSiteAnalyticsRetryWorker(env)
   const db = await getDb(env)
   const usingMongo = Boolean(db)
   const strictPersistence = isStrictPersistenceEnabled(env)
@@ -4179,6 +4611,61 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
 
     await saveClientErrorEvent(db, entry)
     sendJson(response, 200, { ok: true, message: 'Captured.' })
+    return true
+  }
+
+  if (request.method === 'POST' && pathname === '/api/analytics/pageview') {
+    if (!requireSameOrigin(request, env, response)) return true
+    const body = await readJsonBody(request)
+    const now = new Date().toISOString()
+    const entry = {
+      id: randomUUID(),
+      visitorId: typeof body.visitorId === 'string' && body.visitorId.trim() ? body.visitorId.trim() : randomUUID(),
+      path: normalizeAnalyticsPath(body.path || '/'),
+      search: typeof body.search === 'string' ? body.search.trim().slice(0, 200) : '',
+      pageTitle: typeof body.pageTitle === 'string' ? body.pageTitle.trim().slice(0, 300) : '',
+      referrer: normalizeAnalyticsReferrer(body.referrer || ''),
+      contentType: typeof body.contentType === 'string' ? body.contentType.trim().slice(0, 40) : 'page',
+      contentId: typeof body.contentId === 'string' ? body.contentId.trim().slice(0, 100) : '',
+      isAdminRoute: Boolean(body.isAdminRoute),
+      userId: '',
+      userName: '',
+      userEmail: '',
+      isAuthenticated: false,
+      ipHash: getAnalyticsIpHash(request, env),
+      userAgent: typeof body.userAgent === 'string' ? body.userAgent.trim().slice(0, 300) : '',
+      language: typeof body.language === 'string' ? body.language.trim().slice(0, 40) : '',
+      viewportWidth: Number.isFinite(Number(body.viewportWidth)) ? Number(body.viewportWidth) : null,
+      viewportHeight: Number.isFinite(Number(body.viewportHeight)) ? Number(body.viewportHeight) : null,
+      createdAt: now,
+      dateKey: getAnalyticsDateKey(now),
+    }
+
+    let saved = false
+    if (usingMongo) {
+      try {
+        const currentUser = await getAuthenticatedUser(db, request)
+        const isAuthenticated = Boolean(currentUser?.id)
+        entry.userId = isAuthenticated ? currentUser.id : ''
+        entry.userName = isAuthenticated ? currentUser.name || '' : ''
+        entry.userEmail = isAuthenticated ? currentUser.email || '' : ''
+        entry.isAuthenticated = isAuthenticated
+        await saveSiteAnalyticsPageView(db, entry)
+        saved = true
+      } catch (error) {
+        enqueueSiteAnalyticsPageView(entry, error?.message || 'Database unavailable')
+      }
+    } else {
+      enqueueSiteAnalyticsPageView(entry, 'Database unavailable')
+    }
+
+    if (!saved) {
+      void flushSiteAnalyticsPageViewRetryQueue()
+      sendJson(response, 202, { ok: true, queued: true, message: 'Queued for retry.' })
+      return true
+    }
+
+    sendJson(response, 200, { ok: true, queued: false, message: 'Captured.' })
     return true
   }
 
@@ -4378,6 +4865,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
         db.collection('contactMessages').deleteMany({}),
         db.collection('blogPosts').deleteMany({}),
         db.collection('blogPostLikes').deleteMany({}),
+        db.collection('siteAnalyticsPageViews').deleteMany({}),
         db.collection('adminAccessRequests').deleteMany({}),
         db.collection('adminAuditEvents').deleteMany({}),
         db.collection('clientErrorEvents').deleteMany({}),
@@ -4402,6 +4890,7 @@ export async function handleSiteApi(request, response, pathname, env = {}) {
       memoryStore.clientErrorEvents = []
       memoryStore.alerts = []
     }
+    siteAnalyticsPageViewRetryQueue.length = 0
 
     sendJson(response, 200, { ok: true })
     return true

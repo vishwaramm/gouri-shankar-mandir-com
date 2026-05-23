@@ -3,7 +3,7 @@ import process from 'node:process'
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, resolve, normalize } from 'node:path'
-import { createRequestObserver } from './site-api.mjs'
+import { randomUUID } from 'node:crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_ROOT = resolve(__dirname, '..')
@@ -54,6 +54,64 @@ function sendJson(response, statusCode, payload) {
   response.setHeader('Cache-Control', 'no-store')
   response.setHeader('Pragma', 'no-cache')
   response.end(JSON.stringify(payload))
+}
+
+function getRequestId(request) {
+  const header = request?.headers?.['x-request-id']
+  if (typeof header === 'string' && header.trim()) return header.trim()
+  return randomUUID()
+}
+
+function createRequestObserver({ request, response, service = 'web', route = '', extra = {} }) {
+  const requestId = getRequestId(request)
+  if (response && typeof response.setHeader === 'function') {
+    response.setHeader('x-request-id', requestId)
+  }
+
+  const startedAt = Date.now()
+  let finalized = false
+
+  const finalize = (aborted = false) => {
+    if (finalized) return
+    finalized = true
+
+    const durationMs = Date.now() - startedAt
+    const pathname = route || new URL(request.url, 'http://localhost').pathname
+    const statusCode = Number.isInteger(response?.statusCode) ? response.statusCode : aborted ? 499 : 200
+    const payload = {
+      type: 'request',
+      service,
+      requestId,
+      method: request.method || 'GET',
+      path: pathname,
+      statusCode: aborted ? 499 : statusCode,
+      durationMs,
+      aborted: Boolean(aborted),
+      ...extra,
+    }
+
+    const line = JSON.stringify({
+      level: payload.statusCode >= 500 || aborted ? 'error' : 'info',
+      ...payload,
+    })
+
+    if (payload.statusCode >= 500 || aborted) {
+      console.error(line)
+    } else {
+      console.info(line)
+    }
+  }
+
+  response.once('finish', () => finalize(false))
+  response.once('close', () => {
+    if (!finalized) finalize(true)
+  })
+
+  return {
+    requestId,
+    startedAt,
+    finalize,
+  }
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 1500) {

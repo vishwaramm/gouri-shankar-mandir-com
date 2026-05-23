@@ -27,6 +27,7 @@ import {
   ClientErrorLogPanel,
   OrderEventLogPanel,
   SiteAnalyticsPanel,
+  TrafficAnalyticsPanel,
   TempleLettersPanel,
   SquareSyncPanel,
   ServiceRequestCard,
@@ -60,6 +61,12 @@ function PriestToolsPage() {
   const [adminAuditEvents, setAdminAuditEvents] = useState([])
   const [clientErrorEvents, setClientErrorEvents] = useState([])
   const [analyticsSnapshot, setAnalyticsSnapshot] = useState(null)
+  const [trafficFilters, setTrafficFilters] = useState({
+    startDate: '',
+    endDate: '',
+    pageType: 'all',
+    userRole: 'all',
+  })
   const [apiMetrics, setApiMetrics] = useState(null)
   const [metricsBusy, setMetricsBusy] = useState(false)
   const [metricsError, setMetricsError] = useState('')
@@ -545,6 +552,7 @@ function PriestToolsPage() {
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
   }, [contactMessages, currentOfficerId, isSuperAdmin])
   const contactCount = visibleContactMessages.length
+  const totalPageViews = Number(analyticsSnapshot?.traffic?.pageViews ?? 0)
   const dashboardTabs = useMemo(
     () => [
       { id: 'overview', label: 'Overview' },
@@ -553,9 +561,20 @@ function PriestToolsPage() {
       { id: 'community', label: 'Community', count: communityEventCount + rsvpCount },
       { id: 'support', label: 'Support', count: supportCount + sortedRequests.length },
       { id: 'analytics', label: 'Analytics' },
+      { id: 'traffic', label: 'Traffic', count: totalPageViews },
       { id: 'diagnostics', label: 'Diagnostics' },
     ],
-    [isSuperAdmin, adminUsers.length, contactCount, newsletterCount, communityEventCount, rsvpCount, supportCount, sortedRequests.length],
+    [
+      isSuperAdmin,
+      adminUsers.length,
+      contactCount,
+      newsletterCount,
+      communityEventCount,
+      rsvpCount,
+      supportCount,
+      sortedRequests.length,
+      totalPageViews,
+    ],
   )
 
   const handleContactReplyDraftChange = (messageId, value) => {
@@ -1025,15 +1044,23 @@ function PriestToolsPage() {
                 </>
               ) : null}
 
-              {activeTab === 'analytics' ? (
-                <SiteAnalyticsPanel
-                  orders={sortedRequests}
-                  newsletters={newsletters}
-                  rsvps={rsvps}
+                {activeTab === 'analytics' ? (
+                  <SiteAnalyticsPanel
+                    orders={sortedRequests}
+                    newsletters={newsletters}
+                    rsvps={rsvps}
                   communityEvents={communityEvents}
                   contactMessages={contactMessages}
                   blogPosts={blogPosts}
+                    analytics={analyticsSnapshot}
+                  />
+                ) : null}
+
+              {activeTab === 'traffic' ? (
+                <TrafficAnalyticsPanel
                   analytics={analyticsSnapshot}
+                  filters={trafficFilters}
+                  onFiltersChange={setTrafficFilters}
                 />
               ) : null}
 

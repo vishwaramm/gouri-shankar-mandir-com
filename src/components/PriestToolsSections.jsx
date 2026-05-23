@@ -54,6 +54,621 @@ function countByField(items = [], field = 'service') {
     .slice(0, 5)
 }
 
+function formatMetricCount(value) {
+  const number = Number(value || 0)
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(number >= 10_000_000 ? 0 : 1)}M`
+  if (number >= 1_000) return `${(number / 1_000).toFixed(number >= 10_000 ? 0 : 1)}K`
+  return `${number}`
+}
+
+function buildPolylinePoints(values = [], width = 100, height = 36, padding = 4) {
+  const series = values.map((value) => Math.max(0, Number(value || 0)))
+  const max = Math.max(1, ...series)
+  if (!series.length) return ''
+  if (series.length === 1) {
+    const y = height - padding - ((series[0] / max) * (height - padding * 2))
+    return `${padding},${y} ${width - padding},${y}`
+  }
+
+  return series
+    .map((value, index) => {
+      const x = padding + ((width - padding * 2) * index) / (series.length - 1)
+      const y = height - padding - ((value / max) * (height - padding * 2))
+      return `${x},${y}`
+    })
+    .join(' ')
+}
+
+function LineChart({ series = [], stroke = '#0d6efd', height = 180, label = '' }) {
+  const values = series.map((item) => Number(item || 0))
+  const safeHeight = Math.max(120, height)
+  const max = Math.max(1, ...values)
+  const pathPoints = buildPolylinePoints(values, 100, 36, 6)
+
+  if (!values.length) {
+    return <div className="small text-secondary">{label || 'No data yet.'}</div>
+  }
+
+  const areaPath = (() => {
+    const points = values.map((value, index) => {
+      const x = 6 + ((100 - 12) * index) / Math.max(1, values.length - 1)
+      const y = 36 - 6 - ((value / max) * (36 - 12))
+      return [x, y]
+    })
+    const first = points[0]
+    const last = points[points.length - 1]
+    return `M ${first[0]} ${36 - 6} L ${first[0]} ${first[1]} ${points
+      .slice(1)
+      .map(([x, y]) => `L ${x} ${y}`)
+      .join(' ')} L ${last[0]} ${36 - 6} Z`
+  })()
+
+  return (
+    <div>
+      {label ? <div className="small text-secondary mb-2">{label}</div> : null}
+      <svg viewBox="0 0 100 36" className="w-100" style={{ height: `${safeHeight}px` }} role="img" aria-label={label}>
+        <defs>
+          <linearGradient id="traffic-area-gradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill="url(#traffic-area-gradient)" />
+        <polyline
+          fill="none"
+          stroke={stroke}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={pathPoints}
+        />
+      </svg>
+    </div>
+  )
+}
+
+function SplitTrafficBar({ anonymous = 0, authenticated = 0, total = 0 }) {
+  const safeTotal = Math.max(1, Number(total || 0) || Number(anonymous || 0) + Number(authenticated || 0))
+  const anonymousWidth = Math.max(6, Math.round((Number(anonymous || 0) / safeTotal) * 100))
+  const authenticatedWidth = Math.max(6, Math.round((Number(authenticated || 0) / safeTotal) * 100))
+
+  return (
+    <div>
+      <div className="d-flex gap-2 align-items-center mb-2 small text-secondary">
+        <span>Anonymous</span>
+        <span className="ms-auto">Authenticated</span>
+      </div>
+      <div className="progress" style={{ height: '12px' }}>
+        <div className="progress-bar bg-secondary" style={{ width: `${anonymousWidth}%` }} />
+        <div className="progress-bar bg-primary" style={{ width: `${authenticatedWidth}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function normalizeTrafficDate(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().slice(0, 10)
+}
+
+function getTrafficPageType(event = {}) {
+  if (event.isAdminRoute || event.userRole === 'admin') return 'admin'
+  if (String(event.contentType || '') === 'blog_post') return 'blog_post'
+  return 'page'
+}
+
+function getTrafficUserRole(event = {}) {
+  if (event.userRole) return String(event.userRole)
+  if (event.isAdminRoute) return 'admin'
+  if (event.userId) return 'authenticated'
+  return 'anonymous'
+}
+
+function isTrafficEventInRange(event = {}, startDate = '', endDate = '') {
+  const eventTime = new Date(event.createdAt || '').getTime()
+  if (!Number.isFinite(eventTime)) return false
+
+  if (startDate) {
+    const startTime = new Date(`${startDate}T00:00:00`).getTime()
+    if (Number.isFinite(startTime) && eventTime < startTime) return false
+  }
+
+  if (endDate) {
+    const endTime = new Date(`${endDate}T23:59:59.999`).getTime()
+    if (Number.isFinite(endTime) && eventTime > endTime) return false
+  }
+
+  return true
+}
+
+function countByKey(items = [], keySelector = (item) => item) {
+  const counts = new Map()
+  items.forEach((item) => {
+    const key = String(keySelector(item) || '').trim()
+    if (!key) return
+    counts.set(key, (counts.get(key) || 0) + 1)
+  })
+  return [...counts.entries()].sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+}
+
+export function TrafficAnalyticsPanel({ analytics = null, filters = {}, onFiltersChange = () => {} }) {
+  const traffic = analytics?.traffic || {}
+  if (traffic.available === false) {
+    return (
+      <div className="surface surface-strong surface-pad mt-4">
+        <div className="section-kicker mb-2">Traffic</div>
+        <div className="h5 mb-1">Traffic analytics unavailable</div>
+        <p className="mb-0 text-secondary">
+          Traffic tracking requires database storage. Connect MongoDB to capture pageviews and view the breakdown here.
+        </p>
+      </div>
+    )
+  }
+
+  const events = Array.isArray(traffic.events) ? traffic.events : []
+  const pageBreakdown = Array.isArray(traffic.pageBreakdown) ? traffic.pageBreakdown : []
+  const startDate = String(filters.startDate || '')
+  const endDate = String(filters.endDate || '')
+  const pageType = String(filters.pageType || 'all')
+  const userRole = String(filters.userRole || 'all')
+
+  const filteredEvents = events.filter((event) => {
+    if (!isTrafficEventInRange(event, startDate, endDate)) return false
+    if (pageType !== 'all' && getTrafficPageType(event) !== pageType) return false
+    if (userRole !== 'all' && getTrafficUserRole(event) !== userRole) return false
+    return true
+  })
+
+  const filteredUniqueVisitors = new Set(
+    filteredEvents.map((event) => String(event.userId || event.visitorId || '').trim()).filter(Boolean),
+  ).size
+  const anonymousEvents = filteredEvents.filter((event) => getTrafficUserRole(event) === 'anonymous')
+  const authenticatedEvents = filteredEvents.filter((event) => getTrafficUserRole(event) === 'authenticated')
+  const adminEvents = filteredEvents.filter((event) => getTrafficUserRole(event) === 'admin')
+
+  const dailySeries = filteredEvents.reduce((map, event) => {
+    const key = normalizeTrafficDate(event.createdAt)
+    if (!key) return map
+    map.set(key, (map.get(key) || 0) + 1)
+    return map
+  }, new Map())
+
+  const sortedDailySeries = [...dailySeries.entries()].sort((left, right) => String(left[0]).localeCompare(String(right[0])))
+  const topPages = countByKey(
+    filteredEvents,
+    (event) => `${event.path || '/'}|${event.pageTitle || ''}`,
+  )
+    .slice(0, 8)
+    .map(([key, count]) => {
+      const [path, title] = key.split('|')
+      const pageEvents = filteredEvents.filter((event) => `${event.path || '/'}|${event.pageTitle || ''}` === key)
+      const uniqueVisitors = new Set(pageEvents.map((event) => String(event.userId || event.visitorId || '').trim()).filter(Boolean)).size
+      const anonymousViews = pageEvents.filter((event) => getTrafficUserRole(event) === 'anonymous').length
+      const authenticatedViews = pageEvents.filter((event) => getTrafficUserRole(event) !== 'anonymous').length
+      return {
+        path,
+        title: title || path || 'Page',
+        count,
+        uniqueVisitors,
+        anonymousViews,
+        authenticatedViews,
+      }
+    })
+
+  const topBlogPosts = countByKey(
+    filteredEvents.filter((event) => getTrafficPageType(event) === 'blog_post'),
+    (event) => event.contentId || event.path,
+  )
+    .slice(0, 8)
+    .map(([postId, count]) => {
+      const postEvents = filteredEvents.filter((event) => (event.contentId || event.path) === postId && getTrafficPageType(event) === 'blog_post')
+      const uniqueVisitors = new Set(postEvents.map((event) => String(event.userId || event.visitorId || '').trim()).filter(Boolean)).size
+      return {
+        postId,
+        title: postEvents[0]?.pageTitle || postId || 'Blog post',
+        path: postEvents[0]?.path || `/blog/${postId}`,
+        count,
+        uniqueVisitors,
+        anonymousViews: postEvents.filter((event) => getTrafficUserRole(event) === 'anonymous').length,
+        authenticatedViews: postEvents.filter((event) => getTrafficUserRole(event) !== 'anonymous').length,
+      }
+    })
+
+  const topUsers = countByKey(
+    filteredEvents.filter((event) => getTrafficUserRole(event) !== 'anonymous'),
+    (event) => event.userId || event.userEmail || event.visitorId,
+  )
+    .slice(0, 8)
+    .map(([userKey, count]) => {
+      const userEvents = filteredEvents.filter(
+        (event) => getTrafficUserRole(event) !== 'anonymous' && (event.userId || event.userEmail || event.visitorId) === userKey,
+      )
+      return {
+        userId: userKey,
+        userName: userEvents[0]?.userName || userKey || 'User',
+        userEmail: userEvents[0]?.userEmail || '',
+        count,
+        uniqueVisitors: new Set(userEvents.map((event) => String(event.visitorId || event.userId || '').trim()).filter(Boolean)).size,
+      }
+    })
+
+  const topReferrers = countByKey(filteredEvents, (event) => event.referrer || 'direct').slice(0, 8)
+  const pageTypeCounts = {
+    page: filteredEvents.filter((event) => getTrafficPageType(event) === 'page').length,
+    blog_post: filteredEvents.filter((event) => getTrafficPageType(event) === 'blog_post').length,
+    admin: filteredEvents.filter((event) => getTrafficPageType(event) === 'admin').length,
+  }
+  const displayedPageBreakdown = pageBreakdown.slice(0, 50)
+
+  const resetFilters = () => {
+    onFiltersChange({
+      startDate: '',
+      endDate: '',
+      pageType: 'all',
+      userRole: 'all',
+    })
+  }
+
+  const updateFilter = (key, value) => {
+    onFiltersChange({
+      ...filters,
+      [key]: value,
+    })
+  }
+
+  const trafficWindow = Math.max(
+    1,
+    ...sortedDailySeries.map(([, count]) => Number(count || 0)),
+    ...topPages.map((item) => Number(item.count || 0)),
+    ...topBlogPosts.map((item) => Number(item.count || 0)),
+    ...topUsers.map((item) => Number(item.count || 0)),
+  )
+
+  return (
+    <div className="surface surface-strong surface-pad mt-4">
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div className="section-kicker mb-2">Traffic</div>
+          <div className="h5 mb-1">Page views, visitors, and user roles</div>
+          <p className="mb-0 text-secondary">
+            Filter the latest tracked pageviews by date range, page type, and visitor role.
+          </p>
+        </div>
+        <button type="button" className="btn btn-outline-light btn-sm rounded-pill px-3" onClick={resetFilters}>
+          Reset filters
+        </button>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-md-3">
+          <label className="form-label small text-secondary">Start date</label>
+          <input
+            type="date"
+            className="form-control"
+            value={startDate}
+            onChange={(event) => updateFilter('startDate', event.target.value)}
+          />
+        </div>
+        <div className="col-md-3">
+          <label className="form-label small text-secondary">End date</label>
+          <input
+            type="date"
+            className="form-control"
+            value={endDate}
+            onChange={(event) => updateFilter('endDate', event.target.value)}
+          />
+        </div>
+        <div className="col-md-3">
+          <label className="form-label small text-secondary">Page type</label>
+          <select
+            className="form-select"
+            value={pageType}
+            onChange={(event) => updateFilter('pageType', event.target.value)}
+          >
+            <option value="all">All pages</option>
+            <option value="page">Pages</option>
+            <option value="blog_post">Blog posts</option>
+            <option value="admin">Admin pages</option>
+          </select>
+        </div>
+        <div className="col-md-3">
+          <label className="form-label small text-secondary">User role</label>
+          <select
+            className="form-select"
+            value={userRole}
+            onChange={(event) => updateFilter('userRole', event.target.value)}
+          >
+            <option value="all">All visitors</option>
+            <option value="anonymous">Anonymous</option>
+            <option value="authenticated">Signed in</option>
+            <option value="admin">Admins</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Filtered views</div>
+            <div className="h4 mb-0">{filteredEvents.length}</div>
+            <div className="small text-secondary mt-1">Within the selected filters</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Unique visitors</div>
+            <div className="h4 mb-0">{filteredUniqueVisitors}</div>
+            <div className="small text-secondary mt-1">Session or account-based</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Anonymous views</div>
+            <div className="h4 mb-0">{anonymousEvents.length}</div>
+            <div className="small text-secondary mt-1">Visitor ID only</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Signed-in views</div>
+            <div className="h4 mb-0">{authenticatedEvents.length}</div>
+            <div className="small text-secondary mt-1">{adminEvents.length} admin-route views</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-8">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Traffic trend</div>
+            <LineChart
+              series={sortedDailySeries.map(([, count]) => Number(count || 0))}
+              height={220}
+              label="Views per day in the selected range."
+            />
+            <div className="d-flex flex-wrap gap-3 small text-secondary mt-3">
+              <span>{formatMetricCount(filteredEvents.length)} views</span>
+              <span>{formatMetricCount(filteredUniqueVisitors)} visitors</span>
+              <span>{formatMetricCount(anonymousEvents.length)} anonymous</span>
+              <span>{formatMetricCount(authenticatedEvents.length)} signed in</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-4">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Page type split</div>
+            <div className="d-grid gap-3">
+              <div className="d-flex justify-content-between small">
+                <span className="text-secondary">Pages</span>
+                <strong>{formatMetricCount(pageTypeCounts.page)}</strong>
+              </div>
+              <div className="d-flex justify-content-between small">
+                <span className="text-secondary">Blog posts</span>
+                <strong>{formatMetricCount(pageTypeCounts.blog_post)}</strong>
+              </div>
+              <div className="d-flex justify-content-between small">
+                <span className="text-secondary">Admin pages</span>
+                <strong>{formatMetricCount(pageTypeCounts.admin)}</strong>
+              </div>
+              <SplitTrafficBar
+                anonymous={anonymousEvents.length}
+                authenticated={authenticatedEvents.length}
+                total={filteredEvents.length}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Popular pages</div>
+            <div className="d-grid gap-3">
+              {topPages.length ? (
+                topPages.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.path || item.title}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <div className="fw-semibold text-break">{item.title || item.path || 'Page'}</div>
+                          <div className="small text-secondary text-break">{item.path || '/'}</div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} visitors</div>
+                          <div>{item.anonymousViews || 0} anon · {item.authenticatedViews || 0} signed in</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No page views in this filter set.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Popular blog posts</div>
+            <div className="d-grid gap-3">
+              {topBlogPosts.length ? (
+                topBlogPosts.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.postId || item.path || item.title}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <NavLink className="fw-semibold text-break d-block" to={item.path || `/blog/${item.postId}`}>
+                            {item.title || item.postId || 'Blog post'}
+                          </NavLink>
+                          <div className="small text-secondary text-break">{item.path || `/blog/${item.postId || ''}`}</div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} visitors</div>
+                          <div>{item.anonymousViews || 0} anon · {item.authenticatedViews || 0} signed in</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-info" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No blog post views in this filter set.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-7">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top signed-in users</div>
+            <div className="d-grid gap-3">
+              {topUsers.length ? (
+                topUsers.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.userId || item.userName}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <div className="fw-semibold text-break">{item.userName || 'User'}</div>
+                          <div className="small text-secondary text-break">{item.userEmail || item.userId || 'Signed-in visitor'}</div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} sessions</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No signed-in traffic in this filter set.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-5">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top referrers</div>
+            <div className="d-grid gap-3">
+              {topReferrers.length ? (
+                topReferrers.map(([referrer, count]) => {
+                  const width = Math.max(8, Math.round((Number(count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={referrer}>
+                      <div className="d-flex justify-content-between align-items-center gap-3 mb-1">
+                        <div className="fw-semibold text-break">{referrer || 'direct'}</div>
+                        <div className="small text-secondary">{count}</div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-success" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No referrer data in this filter set.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="surface surface-soft surface-pad mt-3">
+        <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+          <div>
+            <div className="section-kicker mb-2">Per-page breakdown</div>
+            <div className="small text-secondary">
+              Views grouped by route so you can inspect each page separately.
+            </div>
+          </div>
+          <div className="small text-secondary">
+            Showing {formatMetricCount(displayedPageBreakdown.length)} of {formatMetricCount(pageBreakdown.length)} pages
+          </div>
+        </div>
+        {displayedPageBreakdown.length ? (
+          <div className="table-responsive" style={{ maxHeight: '420px', overflowY: 'auto' }}>
+            <table className="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Page</th>
+                  <th scope="col" className="text-end">Views</th>
+                  <th scope="col" className="text-end">Unique</th>
+                  <th scope="col" className="text-end">Anon</th>
+                  <th scope="col" className="text-end">Signed in</th>
+                  <th scope="col">Last viewed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayedPageBreakdown.map((item) => (
+                  <tr key={item.path || item.title}>
+                    <td className="text-break">
+                      <div className="fw-semibold text-break">{item.title || item.path || 'Page'}</div>
+                      <div className="small text-secondary text-break">{item.path || '/'}</div>
+                    </td>
+                    <td className="text-end">{item.count || 0}</td>
+                    <td className="text-end">{item.uniqueVisitors || 0}</td>
+                    <td className="text-end">{item.anonymousViews || 0}</td>
+                    <td className="text-end">{item.authenticatedViews || 0}</td>
+                    <td className="text-nowrap">{item.lastViewedAt ? formatDateTime(item.lastViewedAt) : 'Unknown'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="small text-secondary">No page-level traffic has been recorded yet.</div>
+        )}
+      </div>
+
+      <div className="surface surface-soft surface-pad mt-3">
+        <div className="section-kicker mb-2">Recent filtered events</div>
+        <div className="timeline-list">
+          {filteredEvents.length ? (
+            filteredEvents.slice(0, 15).map((event) => (
+              <article className="timeline-item" key={event.id || `${event.createdAt}-${event.path}`}>
+                <time>{formatDateTime(event.createdAt)}</time>
+                <div>
+                  <h4 className="h5 mb-1">{event.pageTitle || event.path || 'Page view'}</h4>
+                  <p className="mb-1 text-secondary">
+                    {event.path || '/'}
+                    {event.userName ? ` · ${event.userName}` : ''}
+                    {event.userRole ? ` · ${event.userRole}` : ''}
+                  </p>
+                  <p className="mb-0 small text-secondary">
+                    {event.contentType || 'page'}
+                    {event.referrer ? ` · referrer: ${event.referrer}` : ''}
+                  </p>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="small text-secondary">No traffic events match the selected filters.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function SquareSyncPanel({ syncStatus, syncBusy, syncMessage, onSync }) {
   return (
     <div className="surface surface-soft surface-pad mt-4">
@@ -119,6 +734,7 @@ export function SiteAnalyticsPanel({
   const snapshotTotals = analytics?.totals || {}
   const snapshotRecent = analytics?.recent30Days || {}
   const snapshotTopServices = Array.isArray(analytics?.topServices) ? analytics.topServices : []
+  const traffic = analytics?.traffic || {}
   const requestCount = Number(snapshotTotals.requests ?? requestEntries.length)
   const supportCount = Number(
     snapshotTotals.supportRequests ??
@@ -139,6 +755,26 @@ export function SiteAnalyticsPanel({
   const blogPendingCount = Number(
     snapshotTotals.blogPending ?? blogPosts.filter((item) => String(item.approvalStatus || '') === 'pending').length,
   )
+  const totalPageViews = Number(traffic.pageViews ?? 0)
+  const uniqueVisitors = Number(traffic.uniqueVisitors ?? 0)
+  const authenticatedPageViews = Number(traffic.authenticatedPageViews ?? 0)
+  const anonymousPageViews = Number(traffic.anonymousPageViews ?? 0)
+  const authenticatedUniqueVisitors = Number(traffic.authenticatedUniqueVisitors ?? 0)
+  const anonymousUniqueVisitors = Number(traffic.anonymousUniqueVisitors ?? 0)
+  const anonymousIpFingerprints = Number(traffic.anonymousIpFingerprints ?? 0)
+  const trafficUnavailable = traffic.available === false
+  const recentPageViews = Number(traffic.recentPageViews ?? 0)
+  const recentUniqueVisitors = Number(traffic.recentUniqueVisitors ?? 0)
+  const recentAuthenticatedPageViews = Number(traffic.recentAuthenticatedPageViews ?? 0)
+  const recentAnonymousPageViews = Number(traffic.recentAnonymousPageViews ?? 0)
+  const recentAuthenticatedUniqueVisitors = Number(traffic.recentAuthenticatedUniqueVisitors ?? 0)
+  const recentAnonymousUniqueVisitors = Number(traffic.recentAnonymousUniqueVisitors ?? 0)
+  const recentAnonymousIpFingerprints = Number(traffic.recentAnonymousIpFingerprints ?? 0)
+  const topPages = Array.isArray(traffic.topPages) ? traffic.topPages : []
+  const topBlogPosts = Array.isArray(traffic.topBlogPosts) ? traffic.topBlogPosts : []
+  const topReferrers = Array.isArray(traffic.topReferrers) ? traffic.topReferrers : []
+  const topUsers = Array.isArray(traffic.topUsers) ? traffic.topUsers : []
+  const dailyViews = Array.isArray(traffic.dailyViews) ? traffic.dailyViews : []
   const last30Days = [
     { label: 'Service requests', count: Number(snapshotRecent.requests ?? countItemsSince(requestEntries, 30)) },
     { label: 'Payments', count: Number(snapshotRecent.donations ?? countItemsSince(donationEntries, 30)) },
@@ -160,6 +796,13 @@ export function SiteAnalyticsPanel({
     ...last30Days.map((item) => Number(item.count || 0)),
     ...topServices.map(([, count]) => Number(count || 0)),
   )
+  const trafficWindow = Math.max(
+    1,
+    ...dailyViews.map((item) => Number(item.count || 0)),
+    ...topPages.map((item) => Number(item.count || 0)),
+    ...topBlogPosts.map((item) => Number(item.count || 0)),
+    ...topUsers.map((item) => Number(item.count || 0)),
+  )
 
   return (
     <div className="surface surface-pad mt-4">
@@ -168,8 +811,13 @@ export function SiteAnalyticsPanel({
           <div className="section-kicker mb-2">Analytics</div>
           <div className="h5 mb-1">Live site activity</div>
           <p className="mb-0 text-secondary">
-            Real counts from requests, inbox traffic, RSVPs, blog posts, and community events.
+            Real counts from requests, inbox traffic, page views, RSVPs, blog posts, and community events.
           </p>
+          {trafficUnavailable ? (
+            <div className="alert alert-warning mt-3 mb-0 py-2 px-3 small">
+              Traffic analytics require database storage and are unavailable until MongoDB is connected.
+            </div>
+          ) : null}
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
           <span className="badge text-bg-light border text-dark">{requestCount} requests</span>
@@ -255,6 +903,222 @@ export function SiteAnalyticsPanel({
                 })
               ) : (
                 <div className="small text-secondary">No service requests yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-8">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Traffic trend</div>
+            <LineChart
+              series={dailyViews.map((item) => Number(item.count || 0))}
+              height={220}
+              label="Daily page views for the last 30 days."
+            />
+            <div className="d-flex flex-wrap gap-3 small text-secondary mt-3">
+              <span>{formatMetricCount(totalPageViews)} total views</span>
+              <span>{formatMetricCount(recentPageViews)} in 30 days</span>
+              <span>{formatMetricCount(recentUniqueVisitors)} recent visitors</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-4">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Anonymous vs signed-in</div>
+            <div className="d-grid gap-3">
+              <div className="d-flex justify-content-between gap-3 small">
+                <span className="text-secondary">Anonymous views</span>
+                <strong>{formatMetricCount(anonymousPageViews)}</strong>
+              </div>
+              <div className="d-flex justify-content-between gap-3 small">
+                <span className="text-secondary">Signed-in views</span>
+                <strong>{formatMetricCount(authenticatedPageViews)}</strong>
+              </div>
+              <SplitTrafficBar
+                anonymous={anonymousPageViews}
+                authenticated={authenticatedPageViews}
+                total={totalPageViews}
+              />
+              <div className="d-flex justify-content-between gap-3 small">
+                <span className="text-secondary">Anonymous visitors</span>
+                <strong>{formatMetricCount(anonymousUniqueVisitors)}</strong>
+              </div>
+              <div className="d-flex justify-content-between gap-3 small">
+                <span className="text-secondary">Anonymous IP fingerprints</span>
+                <strong>{formatMetricCount(anonymousIpFingerprints)}</strong>
+              </div>
+              <div className="d-flex justify-content-between gap-3 small">
+                <span className="text-secondary">Signed-in visitors</span>
+                <strong>{formatMetricCount(authenticatedUniqueVisitors)}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Page views</div>
+            <div className="h4 mb-0">{totalPageViews}</div>
+            <div className="small text-secondary mt-1">{recentPageViews} in 30 days</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Unique visitors</div>
+            <div className="h4 mb-0">{uniqueVisitors}</div>
+            <div className="small text-secondary mt-1">{recentUniqueVisitors} in 30 days</div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Anonymous visits</div>
+            <div className="h4 mb-0">{anonymousPageViews}</div>
+            <div className="small text-secondary mt-1">
+              {recentAnonymousPageViews} in 30 days · {recentAnonymousIpFingerprints} IP fingerprints
+            </div>
+          </div>
+        </div>
+        <div className="col-6 col-lg-3">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="small text-secondary">Signed-in visits</div>
+            <div className="h4 mb-0">{authenticatedPageViews}</div>
+            <div className="small text-secondary mt-1">{recentAuthenticatedPageViews} in 30 days</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Popular pages</div>
+            <div className="d-grid gap-3">
+              {topPages.length ? (
+                topPages.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.path || item.title}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <div className="fw-semibold text-break">{item.title || item.path || 'Page'}</div>
+                          <div className="small text-secondary text-break">{item.path || '/'}</div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} visitors</div>
+                          <div>{item.anonymousViews || 0} anon · {item.authenticatedViews || 0} signed in</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No page views recorded yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-6">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Popular blog posts</div>
+            <div className="d-grid gap-3">
+              {topBlogPosts.length ? (
+                topBlogPosts.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.postId || item.path || item.title}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <NavLink className="fw-semibold text-break d-block" to={item.path || `/blog/${item.postId}`}>
+                            {item.title || item.postId || 'Blog post'}
+                          </NavLink>
+                          <div className="small text-secondary text-break">{item.path || `/blog/${item.postId || ''}`}</div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} visitors</div>
+                          <div>{item.anonymousViews || 0} anon · {item.authenticatedViews || 0} signed in</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-info" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No blog post views recorded yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="row g-3 mt-3">
+        <div className="col-lg-7">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top signed-in users</div>
+            <div className="d-grid gap-3">
+              {topUsers.length ? (
+                topUsers.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.userId || item.userName}>
+                      <div className="d-flex justify-content-between align-items-start gap-3 mb-1">
+                        <div>
+                          <div className="fw-semibold text-break">{item.userName || 'User'}</div>
+                          <div className="small text-secondary text-break">
+                            {item.userEmail || item.userId || 'Signed-in traffic'}
+                          </div>
+                        </div>
+                        <div className="small text-secondary text-end">
+                          <div>{item.count || 0} views</div>
+                          <div>{item.uniqueVisitors || 0} sessions</div>
+                        </div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-primary" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No signed-in traffic yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-lg-5">
+          <div className="surface surface-soft surface-pad h-100">
+            <div className="section-kicker mb-2">Top referrers</div>
+            <div className="d-grid gap-3">
+              {topReferrers.length ? (
+                topReferrers.map((item) => {
+                  const width = Math.max(8, Math.round((Number(item.count || 0) / trafficWindow) * 100))
+                  return (
+                    <div key={item.referrer}>
+                      <div className="d-flex justify-content-between align-items-center gap-3 mb-1">
+                        <div className="fw-semibold text-break">{item.referrer || 'direct'}</div>
+                        <div className="small text-secondary">{item.count || 0}</div>
+                      </div>
+                      <div className="progress" style={{ height: '8px' }}>
+                        <div className="progress-bar bg-success" style={{ width: `${width}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="small text-secondary">No referrer data yet.</div>
               )}
             </div>
           </div>
